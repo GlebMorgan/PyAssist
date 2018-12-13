@@ -1,38 +1,38 @@
 import os
 import pickle
-import protocol
 import time
 import serial
 import sys
-sys.path.insert(0, "D:/GLEB/Python/")
-from RFC1071 import RFC1071
+from checksums import rfc1071, lrc
+from utils import bytewise
 import inspect
 
 
-def bytewise(packet):
-    return " ".join(list(map(''.join, zip(*[iter(packet.hex())]*2)))) or '<Empty>'
-
-def main():
+def testCheckChannel():
 
     s = serial.Serial(port='COM7', baudrate=921600,
-                      bytesize=8, parity=serial.PARITY_ODD, stopbits=1,
+                      bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
                       write_timeout=1, timeout=1)
-    with s:
-        d1 = '0101AABBCCDDEEFFFE889900'
-        d2 = '0102'
-        h1 = '5A0C0600'
-        data = d2
-        header = ''
-        hcrc = RFC1071(header)
-        fcrc = RFC1071(header+data)
-        packet = bytes.fromhex(header) + hcrc.to_bytes(2, 'big') + bytes.fromhex(data) + fcrc.to_bytes(2, 'big')
-        print(f"Data: {data}")
-        print(f"Packet: {bytewise(packet)}")
 
+    with s:
+        d1 = '0101 AA BB CC DD EE FF 88 99'
+        d2 = '0102'
+        h1 = '5A 0C 06 80'
+        data = bytes.fromhex(d1)
+        header = bytes.fromhex(h1)
+
+        hcrc = rfc1071(header)
+        dcrc = lrc(data)
+        fcrc = rfc1071(header+data)
+        zerobyte = b'' if (data.__len__() % 2) else b'\x00'
+        packet = header + hcrc + data + dcrc + zerobyte + fcrc
+        print(f"Packet: [{len(packet)}] {packet.hex()}")
+        print(f"Data: [{len(packet[6:-2])}] {bytewise(packet[6:-2])}")
         s.write(packet)
-        res = s.read(50)
-        res2 = s.read(50)
-        print(f"Reply: {bytewise(res)}, ({res2})")
+
+        res = s.read(18)
+        print(f"Reply packet: [{len(res)}] {res.hex()}")
+        print(f"Reply data: [{len(res[6:-2])}] {bytewise(res[6:-2])}")
 
 def testAssistPacket():
 
@@ -40,10 +40,13 @@ def testAssistPacket():
                       bytesize=8, parity=serial.PARITY_ODD, stopbits=1,
                       write_timeout=1, timeout=5)
     with s:
-        packet = s.read(100)
-        print(bytewise(packet))
-        print(packet[6:-2].hex())
-
+        time.sleep(1)
+        packet = s.read(s.inWaiting())
+        print(f"[{len(packet)}]: {bytewise(packet)}")
+        print(f"[{len(packet[6:-2])}]: {bytewise(packet[6:-2])}")
+        # 5a 0c 06 80 9f 73 01 01 a8 ab af aa ac ab a3 aa 08 00 4e 52
+        #                   01 01 a8 ab af aa ac ab a3 aa 08 00
+        # ans:                 00 a8 ab af aa ac ab a3 aa 08
 
 def test_return_in_gen():
     def gen_with_return():
@@ -56,51 +59,5 @@ def test_return_in_gen():
 
 
 if __name__ == '__main__':
-    test_return_in_gen()
+    main()
     exit()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-with serial.Serial(port='COM10') as s:
-    print("writing")
-    s.write(b'a')
-with serial.Serial(port='COM11', timeout=3) as s:
-    print("reading")
-    print(s.read(0))
-
-s = serial.Serial()
-s.port = "COM6"
-s.baudrate = 19200
-
-# 24 43 53 5E 24 57 48 5E
-# 0x2443535E2457485E
-
-s = serial.Serial()
-s.port = "COM6"
-s.baudrate = 19200
-with s:
-    s.write(b'$CS^')
-    rep = s.read(107)
-print(rep.hex().upper())
-orig = "".join('2A 20 43 53 20 30 20 30 20 30 20 31 20 30 2E 32 30 30 30 30 30 20 30 2E 30 30 30 30 30 30 20 30 2E 30 30 30 30 30 30 20 32 20 30 20 32 30 30 30 20 31 36 31 36 30 20 32 37 32 31 33 20 2D 34 30 2E 30 30 30 30 30 30 20 30 2E 30 30 30 30 30 30 20 30 2E 30 30 30 30 30 30 20 33 32 35 30 30 30 0A 0A 2A 57 48 3A 20 32 38 31 0A'.split(' '))
-print(rep == orig)
-b = int(rep, 16).to_bytes(107,'big')
-print(b)
-print(b.rfind(b'16160'))
-print(b.rfind(b'27213'))

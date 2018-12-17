@@ -5,8 +5,13 @@ import time
 import math
 import serial
 import sys
+
+import struct
 from checksums import rfc1071, lrc
+from timer import Timer
 from utils import bytewise
+from math import ceil
+import bits
 import inspect
 
 '''
@@ -16,14 +21,31 @@ import inspect
 
 def wrap(msg, adr):
     # 'msg' includes parity bit CRC!
-    datalen = len(msg) # 10
-    assert (datalen <= 0xFFF)
-    assert (adr <= 0xFF)
+    datalen = len(msg)
+    assert(datalen <= 0xFFF)
+    assert(adr <= 0xFF)
     zerobyte = b'\x00' if (datalen % 2) else b''
     datalen += 2*len(zerobyte)
     header = b'\x5A' + adr.to_bytes(1, 'little') + (datalen//2 | (len(zerobyte) << 15)).to_bytes(2, 'little')
     packet = header + rfc1071(header) + msg + zerobyte
     return packet + rfc1071(packet)
+
+
+def wrap_pack(msg, adr):
+    # 'msg' includes parity bit CRC!
+    datalen = len(msg)
+    assert(datalen <= 0xFFF)
+    assert(adr <= 0xFF)
+    zerobyte = b'\x00' if (datalen % 2) else b''
+    # packet struct format: 'B B 2s 2s {datasize}s 2s'
+    header = struct.pack('< B B H',
+                         0x5A, adr, int(ceil(datalen/2)) | bits.set(bits=15),) # size in 16-bit words
+    packet = header + rfc1071(header) + msg + zerobyte
+    return packet + rfc1071(packet)
+
+
+def unwrap(packet):
+    ...
 
 
 def testDataLengthField(b_msg):
@@ -106,10 +128,21 @@ def test_return_in_gen():
     for i in range(10): print(g.__next__())
 
 
-def main():
-    testCheckChannelWrapped()
+def test_wrap_perf():
+    d1 = '0101 AA BB CC DD EE FF 88 99'
+    d2 = '0101 a8 ab af aa ac ab a3 aa'
+    d3 = '0102'
+    d4 = '0103'
+    data = bytes.fromhex(d1)
+    with Timer("old"):
+        for i in range(100_000): packet = wrap(data+lrc(data), adr=12)
+    with Timer("new"):
+        for i in range(100_000): packet2 = wrap_pack(data+lrc(data), adr=12)
+    print(packet)
+    print(packet2)
+    print(packet2 == packet)
 
 
 if __name__ == '__main__':
-    main()
+    test_wrap_perf()
     exit()

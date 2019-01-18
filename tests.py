@@ -1,3 +1,4 @@
+import logging
 import os
 import pickle
 import time
@@ -14,13 +15,170 @@ from math import ceil
 import bits
 import inspect
 
+
 '''
 (http://plaintexttools.github.io/plain-text-table)
 '''
 
+# TODO: application params (just globals for now)
+HEADER_LEN = 6              # in bytes
+STARTBYTE = b'\x5A'         # type: bytes
+MASTER_ADDRESS = 0          # should be in reply to host machine
+samplepacket = b'Z\x0c\x06\x80\x9fs\x01\x01\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\x00\x0f\xcc'
+samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xcd\x10'
+
+log = logging.getLogger()
 
 # 1           2     3:4           5:6         7:8       9:...         -3    -2:-1
 # StartByte - ADR - Length|EVEN - HeaderRFC - COMMAND - CommandData - LRC - PacketRFC
+
+
+#                       RECEIVE MESSAGE ALGORITHM:
+#
+# Handle serial timeout:
+#
+#   bad_header = False
+#   already_received_data = serial.read(wrapper_len)
+#   if (first byte of that data is a StartByte AND header checksum is valid):
+#       header = already_received_data
+#       datalen, zerobyte = parseHeader(header)
+#       data = serial.read(datalen + 2) # 2 is rfc of wrapper
+#       if (rfc1071(data)):
+#           return header + data
+#       else:
+#           raise BadChecksumError("Bad wrapper checksum")
+#   else:
+#       bad_header = True
+#       loop:
+#          log(bad header)
+#          read from COM port all data available at the moment (or 1 byte if in_waiting is 0 - to let timeout occur)
+#          attach that to already_received_data
+#          search for StartByte occurrences:
+#              take current found StartByte and subsequent (wrapper_len-1) bytes
+#              if IndexError occurred (there's to few bytes in received data):
+#                  read data further (continue loop)
+#              if (header checksum is not valid):
+#                  read data further (continue loop)
+#              else:
+#                  header = already_received_data[:wrapper_len]
+#                  datalen, zerobyte = parseHeader(header)
+#                  data = already_received_data[wrapper_len:]
+#                  if (rfc1071(data)):
+#                      return header + data
+#                  else:
+#                      data = serial.read(datalen + 2 - (len(already_received_data) - startByteIndex - wrapper_len ± 1))
+#                      if (rfc1071(data)):
+#                          return header + data
+#                      else:
+#                          raise BadDataError("Bad wrapper checksum")
+#           if no one found here:
+#               read data further (continue loop)
+#
+#   log(whether smth has been flushed (i.e. in_w > 0))
+#   flush com port (cause no valid data is present in what have been received)
+#
+#
+# parseHeader(header):
+#
+#   assert header len is valid
+#   assert start byte is valid
+#
+#       # unpack header (fixed size - 6 bytes)
+#       fields = struct.unpack('< B B H H', header)
+#       if (fields[1] != MASTER_ADDRESS (i.e. 0)):
+#           raise BadDataError(f"Wrong master address ('{MASTER_ADDRESS}' expected)")
+#       datalen = (fields[2] & 0x0FFF) * 2 # size in bytes
+#       zerobyte = (fields[2] & 1<<15) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
+#       log.debug(f"Zbyte: {zerobyte == 1}")
+#       return datalen, zerobyte
+#
+#
+#
+#
+#
+#   analyse if smth is left in COM port buffer after all data is successfully received - ? how to do it right for now
+#
+#   notify the situation when bad data had been received prior to valid packet was found
+
+SerialError = serial.serialutil.SerialException  # just an alias
+SerialWriteTimeoutError = serial.serialutil.SerialTimeoutException  # just an alias
+class SerialReadTimeoutError(SerialError): pass
+
+class BadDataError(RuntimeError):
+    """Data received is invalid or corrupted"""
+
+
+def receivePacket(com): # TODO: make it a method of the class extending serial.Serial
+                        # (to be able to write com.receivePacket()
+    """
+    :param com: open serial object
+    :type com: serial.Serial
+    :return: unwrapped high-level data
+    :rtype: bytes
+    """
+
+    bytesReceived = com.read(HEADER_LEN)
+    if (len(bytesReceived) == HEADER_LEN and bytesReceived[0] == STARTBYTE and rfc1071(bytesReceived)):
+        header = bytesReceived
+        datalen, zerobyte = _parseHeader(header)
+        data = com.read(datalen + 2) # 2 is wrapper RFC
+        if (len(data) < datalen + 2):
+            raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])")
+        if (rfc1071(data)):
+            if (bytesReceived): log.info("Unread data is left in the input buffer")
+            return data if (not zerobyte) else data[:-1]
+        else:
+            raise BadDataError(f"Bad packet checksum "
+                               f"(expected '{bytewise(rfc1071(data[:-2]))}', got '{bytewise(data[-2:])}'). "
+                               f"Packet discarded")
+    elif (len(bytesReceived) == 0):
+        raise SerialReadTimeoutError("No reply")
+    elif (len(bytesReceived) < HEADER_LEN):
+        raise BadDataError(f"Bad packet (header too small, [{len(bytesReceived)}] out of [{HEADER_LEN}])")
+    else:
+        log.info("Bad data in front of the stream. Searching for valid header...")
+        for i in range(100): # TODO: limit infinite loop better (at least just raise a RuntimeError)
+            bytesReceived += com.read(com.in_waiting or 1)  # 'or 1' is to let timeout occur if no data is on the stream
+            if (len(bytesReceived) == 0):
+                raise BadDataError("Bad packet (no data)")
+            for idx in (i for (i, byte) in enumerate(bytesReceived) if byte == STARTBYTE):
+                try:
+                    header = bytesReceived[idx:idx + HEADER_LEN]
+                except IndexError:  # that means we have reached the end of received data trying to get the header
+                    break  # continue the upper loop (wait for more data)
+                if (rfc1071(header)):
+                    log.info("Found valid header")
+                    datalen, zerobyte = _parseHeader(header)
+                    reminder_len = datalen + 2 - (len(bytesReceived) - idx - HEADER_LEN)
+                    data = com.read(reminder_len)
+                    if (len(data) != reminder_len):
+                        raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{reminder_len}])")
+                    if (rfc1071(data)):
+                        if (bytesReceived): log.info("Unread data is left in the input buffer")
+                        return data if (not zerobyte) else data[:-1]
+                    else:
+                        raise BadDataError(f"Bad packet checksum "
+                                           f"(expected '{bytewise(rfc1071(data[:-2]))}', got '{bytewise(data[-2:])}'). "
+                                           f"Packet discarded")
+        else: raise RuntimeError("Oh, I'm tired...")
+
+
+def _parseHeader(header):
+    assert (len(header) == HEADER_LEN)
+    assert (header[0] == STARTBYTE)
+
+    # unpack header (fixed structure - 6 bytes)
+    fields = struct.unpack('< B B H H', header)
+    if (fields[1] != MASTER_ADDRESS):
+        raise BadDataError(f"Wrong master address (expected '{MASTER_ADDRESS}', got '{fields[1]}')")
+    datalen = (fields[2] & 0x0FFF) * 2 # extract size in bytes, not 16-bit words
+    zerobyte = (fields[2] & 1<<15) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
+    log.debug(f"ZeroByte: {zerobyte == 1}")
+    return datalen, zerobyte
+
+
+    # analyse if smth is left in COM port buffer after all data is successfully received - ? how to do it right for now
+# -------------------------------------------------------------------------------------------------------------------
 
 
 def wrap(msg, adr):
@@ -63,6 +221,12 @@ def unwrap(packet):
     zerobyte = (fields[2] & 0x8000) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
     print(f"Zbyte: {zerobyte == 1}")
     return packet[6:6+datalen-zerobyte]
+
+def parseSignalDescriptor(data): # 6F 77 6C 56 6F 6C 74 61 67 65 00 00 07 08 00 00 00 FF FF 10 27 00 00 00 00 00 80 3F
+    # assumes COMMAND is '03 02'
+    sigName, fields = data.split(b'\0', 1)
+    fields = struct.unpack('< B B ')
+    ...
 
 
 # -------------------------------------------------------------------------------------------------------------------
@@ -167,9 +331,6 @@ if __name__ == '__main__':
         print(packet2 == packet)
 
 
-    samplepacket = b'Z\x0c\x06\x80\x9fs\x01\x01\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\x00\x0f\xcc'
-    samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xcd\x10'
-
     def test_unwrap():
         d1 = '0101 AA BB CC DD EE FF 88 99'
         d2 = '0101 a8 ab af aa ac ab a3 aa'
@@ -185,10 +346,61 @@ if __name__ == '__main__':
         print(redata == validdata)
         print(rfc1071(samplereply))
 
+
+    def test_bytes_receipt_speed():
+
+        s = serial.Serial(port='COM6', baudrate=921600,
+                          bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
+                          write_timeout=1, timeout=1)
+
+        with s:
+            data = bytes.fromhex('0107' + 'DE'*369 + '00')
+            packet = wrap_pack(data + lrc(data), adr=12)
+            s.write(packet)
+            prev = None
+            for i in range(10_000):
+                curr = s.in_waiting
+                if (curr != prev):
+                    print(curr)
+                    prev = curr
+            print(s.read(s.in_waiting))
+            ...
+        # Results:
+        #       Packets are sent by pieces of 120 bytes length. They may group in multiples of 120.
+        #       i.e. if packet is 380 bytes long, in_waiting amount of bytes in COM port input buffer may look like:
+        #               (380)
+        #               (120, 380)
+        #               (240, 380)
+        #               (120, 360, 380)
+        #               ... and so on
+
+
+    def test_double_read():
+        s = serial.Serial(port='COM6', baudrate=921600,
+                          bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
+                          write_timeout=1, timeout=1)
+
+        with s:
+            data = bytes.fromhex('0101 AA BB CC DD EE FF 88 99')
+            packet = wrap_pack(data + lrc(data), adr=12)
+            s.write(packet)
+            time.sleep(0.01)
+            print(f"in_w before read 4 bytes: {s.in_waiting}")
+            res = s.read(4)
+            print("4 bytes received = " + bytewise(res))
+            print(f"in_w after: {s.in_waiting}")
+            time.sleep(0.01)
+            try:
+                res2 = s.read(s.in_waiting)
+            except serial.serialutil.SerialTimeoutException:
+                print("Timeout")
+            else: print("Received all the rest: " + bytewise(res2))
+
+
     def test_send_command():
         class CommandError(RuntimeError): pass
 
-        s = serial.Serial(port='COM2', baudrate=921600,
+        s = serial.Serial(port='COM6', baudrate=921600,
                           bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
                           write_timeout=1, timeout=1)
 
@@ -202,7 +414,8 @@ if __name__ == '__main__':
             'ss': '0106', # save settings
             'tch': '0107 11 22 33 00', # test channel
             'tch-0': '0107 11 22 33 44', # test channel (without '0' ending)
-
+            'tch-big': '0107' + 'AB'*349 + '00', # test channel (big amount of bytes)
+            'sc': '03 01', # signals count
         }
         commands = cMsgs.keys()
 
@@ -222,12 +435,22 @@ if __name__ == '__main__':
                     if (command == 'flush'):
                         s.reset_input_buffer()
                         continue
-                    if (command.startswith('-')):
+                    if (command == 'read'):
+                        reply = s.read(s.in_waiting)
+                        print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
+                        continue
+
+                    if (command.startswith('sd')):
+                        try: sigNum = int(command[2:], 16)
+                        except ValueError: raise CommandError("Invalid signal number")
+                        if (sigNum > 0xFFFF): raise CommandError("Signal number is too big")
+                        data = bytes.fromhex(f'0302') + sigNum.to_bytes(2, 'little')
+                    elif (command.startswith('-')):
                         try: data = bytes.fromhex("".join(command[1:].split(' ')))
                         except ValueError: raise CommandError("Wrong hex command")
                     elif (command not in commands): raise CommandError("Wrong command")
                     if (not data): data = bytes.fromhex(cMsgs[command])
-                    print(f"Data [{len(data)}]: {bytewise(data)}")
+                    print(f"Data [{len(data)}]: {bytewise(data[:2])} - {bytewise(data[2:])}")
                     packet = wrap_pack(data+lrc(data), adr=12)
                     print(f"Packet [{len(packet)}]: {bytewise(packet)}")
                     s.write(packet)
@@ -235,12 +458,48 @@ if __name__ == '__main__':
                     reply = s.read(s.in_waiting)
                     print(f"Reply packet [{len(reply)}]: {bytewise(reply)}")
                     replydata = unwrap(reply)
-                    print(f"Reply data [{len(replydata[:-1])}]: {bytewise(replydata[:-1])}")
+                    print(f"Reply data [{len(replydata[:-1])}]: {bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
                     if (command in ('di', 'st',)):
                         print(f"String: '{replydata[1:-1].decode('utf-8')}'")
                     s.reset_input_buffer()
+
                 except CommandError as e: print(e.args[0])
                 except serial.serialutil.SerialTimeoutException as e: print(e.args[0])
 
-    test_send_command()
+
+    def test_receivePacket():
+        s = serial.Serial(port='COM6', baudrate=921600,
+                          bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
+                          write_timeout=1, timeout=1)
+
+        cMsgs = {
+            'chch': '0101 AA BB CC DD EE FF 88 99',  # check channel
+            'r': '0102',  # reset
+            'di': '0103',  # device info
+            'sm+': '010401',  # scan mode on
+            'sm-': '010400',  # scan mode off
+            'st': '0105',  # selftest
+            'ss': '0106',  # save settings
+            'tch': '0107 11 22 33 00',  # test channel
+            'tch-0': '0107 11 22 33 44',  # test channel (without '0' ending)
+            'tch-big': '0107' + 'AB' * 349 + '00',  # test channel (big amount of bytes)
+            'sc': '03 01',  # signals count
+        }
+
+        with s:
+            for c in cMsgs.values():
+                data = bytes.fromhex(c)
+                packet = wrap_pack(data + lrc(data), adr=12)
+                print(f"Packet [{len(packet)}]: {bytewise(packet)}")
+                s.write(packet)
+                time.sleep(0.05)
+                reply = receivePacket(s)
+                print(f"Reply packet [{len(reply)}]: {bytewise(reply)}")
+                time.sleep(0.5)
+        print("[DONE]")
+
+    # test_send_command()
+    # test_bytes_receipt_speed()
+    # test_double_read()
+    test_receivePacket()
     exit()

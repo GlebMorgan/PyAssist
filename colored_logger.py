@@ -54,17 +54,18 @@ class _AnsiColorizer:
 
 
 class ColorHandler(logging.StreamHandler):
+
+    msg_colors = {
+        logging.DEBUG: "blue",
+        logging.INFO: "magenta",
+        logging.WARNING: "yellow",
+        logging.ERROR: "cyan",
+        logging.CRITICAL: "red",
+    }
+
     def __init__(self, stream=sys.stdout):
         super(ColorHandler, self).__init__(_AnsiColorizer(stream))
 
     def emit(self, record):
-        msg_colors = {
-            logging.DEBUG: "blue",
-            logging.INFO: "magenta",
-            logging.WARNING: "yellow",
-            logging.ERROR: "cyan",
-            logging.CRITICAL: "red",
-        }
-
-        color = msg_colors.get(record.levelno, "blue")
+        color = __class__.msg_colors.get(record.levelno, "blue")
         self.stream.write(record.msg + "\n", color)

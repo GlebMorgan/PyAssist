@@ -8,6 +8,7 @@ import pickle
 import time
 
 import math
+import random
 import serial
 import sys
 
@@ -94,7 +95,7 @@ class SerialTransceiver(serial.Serial):
         if (len(bytesReceived) == HEADER_LEN and bytesReceived[0] == STARTBYTE and
                 int.from_bytes(rfc1071(bytesReceived), byteorder='big') == 0):  #TODO: byteorder here and everywhere - ?
             header = bytesReceived
-            return self._readData(header)
+            return self.__readData(header)
         elif (len(bytesReceived) == 0):
             raise SerialReadTimeoutError("No reply")
         elif (len(bytesReceived) < HEADER_LEN):
@@ -115,12 +116,12 @@ class SerialTransceiver(serial.Serial):
                 header = bytesReceived[startbyteIndex:] + headerReminder
                 if (int.from_bytes(rfc1071(header), byteorder='big') == 0):
                     log.info("Found valid header")
-                    return self._readData(header)
+                    return self.__readData(header)
             else: raise RuntimeError("Cannot find header in datastream, too many attempts...")
 
 
-    def _readData(self, header):
-        datalen, zerobyte = self._parseHeader(header)
+    def __readData(self, header):
+        datalen, zerobyte = self.__parseHeader(header)
         data = self.read(datalen + 2)  # 2 is wrapper RFC
         if (len(data) < datalen + 2):
             raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])")
@@ -133,7 +134,7 @@ class SerialTransceiver(serial.Serial):
 
 
     @staticmethod
-    def _parseHeader(header):
+    def __parseHeader(header):
         assert (len(header) == HEADER_LEN)
         assert (header[0] == STARTBYTE)
 
@@ -193,7 +194,7 @@ def receivePacketBulk(com):
     ) #TODO: byteorder here and everywhere - ?
     if (headerOK):
         header = bytesReceived
-        datalen, zerobyte = _parseHeader(header)
+        datalen, zerobyte = SerialTransceiver()._SerialTransceiver__parseHeader(header)
         data = com.read(datalen + 2) # 2 is wrapper RFC
         if (len(data) < datalen + 2):
             raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])")
@@ -220,11 +221,11 @@ def receivePacketBulk(com):
                     break  # continue the upper loop (wait for more data)
                 if (int.from_bytes(rfc1071(header), byteorder='big') == 0):
                     log.info("Found valid header")
-                    datalen, zerobyte = _parseHeader(header)
-                    reminder_len = datalen + 2 - (len(bytesReceived) - idx - HEADER_LEN)
-                    data = com.read(reminder_len)
-                    if (len(data) != reminder_len):
-                        raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{reminder_len}])")
+                    datalen, zerobyte = SerialTransceiver()._SerialTransceiver__parseHeader(header)
+                    reminderLen = datalen + 2 - (len(bytesReceived) - idx - HEADER_LEN)
+                    data = com.read(reminderLen)
+                    if (len(data) != reminderLen):
+                        raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{reminderLen}])")
                     if (int.from_bytes(rfc1071(header+data), byteorder='big') == 0):
                         if (bytesReceived): log.info("Unread data is left in the input buffer")
                         return data if (not zerobyte) else data[:-1]
@@ -236,6 +237,55 @@ def receivePacketBulk(com):
 
 
     # analyse if smth is left in COM port buffer after all data is successfully received - ? how to do it right for now
+
+
+class DspProtocol:
+
+    # STRUCT CODES:
+    # 1 byte (uint8)   -> B
+    # 2 byte (uint16)  -> H
+    # 4 byte (uint32)  -> I
+    # 8 byte (uint64)  -> Q
+    # float  (4 bytes) -> f
+    # double (8 bytes) -> d
+    # char[] (array)   -> s
+
+    def __init__(self):
+        self.tr = SerialTransceiver()
+
+    # add to every method: method.required = bool() ► denotes command "obligatoriness"
+
+    #TODO: write a decorator that will assign a method attrs (at least, 'required')
+    # and pass inside an appropriate 'command' parameter taken from decorator parameter
+
+    @staticmethod
+    def __printReply(replydata):
+        print(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0])} - {bytewise(replydata[1:-1])}")
+
+
+    def checkChannel(self, randomData=False):
+        commandHexStr = '01 01'
+        if(randomData):
+            dataHexStr = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
+        else:
+            dataHexStr = '01 23 45 67 89 AB CD EF'
+        self.tr.sendPacket(bytes.fromhex(commandHexStr + dataHexStr))
+        reply = self.tr.receivePacket()
+        if (lrc(reply)):
+            raise BadDataError(f"Bad reply data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
+                                            f"got '{bytewise(reply[-1:])}'). Reply discarded")
+        self.__printReply(reply)
+        if (reply[1:9] != dataHexStr):
+            raise BadDataError(f"Reply contains bad data (expected '{dataHexStr}', "
+                               f"got '{bytewise(reply[1:9])}'). Reply discarded")
+        return reply[0] == 0
+    checkChannel.required = True
+
+    def
+
+
+
+
 # -------------------------------------------------------------------------------------------------------------------
 
 

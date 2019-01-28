@@ -239,7 +239,7 @@ def receivePacketBulk(com):
     # analyse if smth is left in COM port buffer after all data is successfully received - ? how to do it right for now
 
 
-class DspProtocol:
+class DspSerialApi:
 
     # STRUCT CODES:
     # 1 byte (uint8)   -> B
@@ -249,6 +249,8 @@ class DspProtocol:
     # float  (4 bytes) -> f
     # double (8 bytes) -> d
     # char[] (array)   -> s
+
+    COMMANDS = {}
 
     def __init__(self):
         self.tr = SerialTransceiver()
@@ -262,14 +264,27 @@ class DspProtocol:
     def __printReply(replydata):
         print(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0])} - {bytewise(replydata[1:-1])}")
 
+    # command wrapper
+    def command(commandStrHex):
+        def command_wrapper(fun):
+            from functools import wraps
+            fun.command = commandStrHex
+            @wraps(fun)
+            def func_wrapper(*args, **kwargs):
+                #TODO: get COMMANDS dict NOT from pulling it out of self.__class__ (that's ridiculous!)
+                args[0].__class__.COMMANDS[fun.__name__] = commandStrHex
+                return fun(*args, **kwargs)
+            return func_wrapper
+        return command_wrapper
 
+    @command('01 01')
     def checkChannel(self, randomData=False):
-        commandHexStr = '01 01'
         if(randomData):
             dataHexStr = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
         else:
             dataHexStr = '01 23 45 67 89 AB CD EF'
-        self.tr.sendPacket(bytes.fromhex(commandHexStr + dataHexStr))
+                                       # ▼ quite duck_tape'ish, but efficiency doesn't allow to pass 'command' as param
+        self.tr.sendPacket(bytes.fromhex(self.checkChannel.command + dataHexStr))
         reply = self.tr.receivePacket()
         if (lrc(reply)):
             raise BadDataError(f"Bad reply data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
@@ -280,9 +295,6 @@ class DspProtocol:
                                f"got '{bytewise(reply[1:9])}'). Reply discarded")
         return reply[0] == 0
     checkChannel.required = True
-
-    def
-
 
 
 
@@ -613,12 +625,18 @@ if __name__ == '__main__':
                 input("pause...")
         print("[DONE]")
 
+    def apiTest():
+        p = DspSerialApi()
+        with p.tr:
+            p.checkChannel()
+
     functions = [
         lambda: ...,
         test_bytes_receipt_speed,
         test_double_read,
         test_send_command,
         test_receivePacket,
+        apiTest,
     ]
 
-    functions[3](True)
+    functions[5]()

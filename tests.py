@@ -15,10 +15,12 @@ import sys
 import struct
 from checksums import rfc1071, lrc
 from timer import Timer
-from utils import bytewise, bitwise
+from utils import bytewise, bitwise, legacy
 from math import ceil
+from enum import Enum
+
 import bits
-import inspect
+from functools import wraps
 
 
 '''
@@ -28,6 +30,7 @@ import inspect
 #TODO: application params (just globals for now)
 COM = 'COM6'
 ADR = 12
+TIMEOUT = 0.5
 HEADER_LEN = 6              # in bytes
 STARTBYTE = 0x5A         # type: int
 MASTER_ADDRESS = 0          # should be in reply to host machine
@@ -39,25 +42,36 @@ samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xc
 # StartByte - ADR - Length|EVEN - HeaderRFC - COMMAND - CommandData - LRC - PacketRFC
 
 
-log = logging.getLogger(__name__+":main")
-log.setLevel(logging.DEBUG)
-log.addHandler(ColorHandler())
-
+# slog - should be used for general serial communication info only
 slog = logging.getLogger(__name__+":serial")
 slog.setLevel(logging.DEBUG)
 slog.addHandler(ColorHandler())
+
+#log - should be used for additional detailed info
+log = logging.getLogger(__name__+":main")
+log.setLevel(logging.INFO)
+log.addHandler(ColorHandler())
+log.disabled = False
+
 
 SerialError = serial.serialutil.SerialException  # just an alias
 SerialWriteTimeoutError = serial.serialutil.SerialTimeoutException  # just an alias
 class SerialReadTimeoutError(SerialError): pass
 
 
-class BadDataError(RuntimeError):
-    """Data received is invalid or corrupted"""
+class SerialCommunicationError(RuntimeError):
+    """Application-level errors, indicate the command sent to the device was not properly executed"""
 
 
-def showError(e):
-    log.error(f"{e.__class__.__name__}: {e.args[0] if e.args else '<No details>'}")
+class BadDataError(SerialCommunicationError):
+    """Data received over serial port is invalid or corrupted"""
+
+
+class BadAckError(SerialCommunicationError):
+    """Devise has sent 'FF' acknowledge byte => error executing command on device side"""
+
+def showError(error):
+    log.error(f"{error.__class__.__name__}: {error.args[0] if error.args else '<No details>'}")
 
 
 def showStackTrace(e):
@@ -71,8 +85,8 @@ class SerialTransceiver(serial.Serial):
         super().__init__(*args, **kwargs)
         self.port = COM
         self.baudrate = 921600
-        self.write_timeout = 1
-        self.timeout = 1
+        self.write_timeout = TIMEOUT
+        self.timeout = TIMEOUT
 
 
     def receivePacket(self):
@@ -144,7 +158,7 @@ class SerialTransceiver(serial.Serial):
             raise BadDataError(f"Wrong master address (expected '{MASTER_ADDRESS}', got '{fields[1]}')")
         datalen = (fields[2] & 0x0FFF) * 2 # extract size in bytes, not 16-bit words
         zerobyte = (fields[2] & 1<<15) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
-        # log.debug(f"ZeroByte: {zerobyte == 1}")
+        log.debug(f"ZeroByte: {zerobyte == 1}")
         return datalen, zerobyte
 
 
@@ -167,10 +181,13 @@ class SerialTransceiver(serial.Serial):
         # below: data_size = datalen//2 ► translate data size in 16-bit words
         header = struct.pack('< B B H', STARTBYTE, ADR, (datalen//2) | (len(zerobyte) << 15))
         packet = header + rfc1071(header) + msg + zerobyte
-        bytesSentCount = self.write(packet + rfc1071(packet))
+        packetToSend = packet + rfc1071(packet)
+        bytesSentCount = self.write(packetToSend)
+        slog.debug(f"Packet [{len(packetToSend)}]: {bytewise(packetToSend)}")
         return bytesSentCount
 
 
+@legacy
 def receivePacketBulk(com):
     """
     ### Function is not tested properly!
@@ -239,8 +256,25 @@ def receivePacketBulk(com):
     # analyse if smth is left in COM port buffer after all data is successfully received - ? how to do it right for now
 
 
+# command wrapper
+@legacy
+def old_command_decorator(commandStrHex, required=False, type='UNSPECIFIED'):
+    def command_wrapper(fun):
+        from functools import wraps
+        fun.command = commandStrHex
+        @wraps(fun)
+        def func_wrapper(*args, **kwargs):
+            #TODO: get COMMANDS dict NOT from pulling it out of self.__class__ (that's ridiculous!)
+            DspSerialApi.COMMANDS[fun.__name__] = commandStrHex
+            return fun(*args, **kwargs)
+        return func_wrapper
+    return command_wrapper
+
+
 class DspSerialApi:
 
+    ACK_OK = 0x00
+    ACK_BAD = 0xFF
     # STRUCT CODES:
     # 1 byte (uint8)   -> B
     # 2 byte (uint16)  -> H
@@ -250,51 +284,89 @@ class DspSerialApi:
     # double (8 bytes) -> d
     # char[] (array)   -> s
 
-    COMMANDS = {}
 
-    def __init__(self):
-        self.tr = SerialTransceiver()
-
-    # add to every method: method.required = bool() ► denotes command "obligatoriness"
+    #TODO: add to every method: method.required = bool() ► denotes command "obligatoriness"
 
     #TODO: write a decorator that will assign a method attrs (at least, 'required')
     # and pass inside an appropriate 'command' parameter taken from decorator parameter
 
+
+    def __init__(self):
+        self.tr = SerialTransceiver()
+
+
+    class Command():
+
+        class Type(Enum):
+            UNSPECIFIED = 0
+            UTIL = 1
+            PROG = 2
+            SIG = 3
+            TELE = 4
+
+        COMMANDS = {}
+
+        def __init__(self, command, shortcut, required=False, category=Type.UNSPECIFIED):
+            if (not isinstance(shortcut, str)): raise TypeError(f"'shortcut' must be a str, not {type(shortcut)}")
+            try:
+                if (len(bytes.fromhex(command)) != 2): raise ValueError
+            except (ValueError, TypeError):
+                raise TypeError("command' is not a valid 2 bytes hex string representation")
+
+            self.shortcut = shortcut
+            self.command = command
+            self.required = required
+            self.type = category
+
+
+        def __call__(self, fun):
+            @wraps(fun)
+            def fun_wrapper(*args, **kwargs):
+                args = (args[0], self.command) + args[1:]
+                return fun(*args, **kwargs)
+
+            fun_wrapper.command = self.command
+            fun_wrapper.shortcut = self.shortcut
+            fun_wrapper.required = self.required
+            fun_wrapper.type = self.type
+            self.COMMANDS[fun.__name__] = fun_wrapper
+            return fun_wrapper
+
+
     @staticmethod
     def __printReply(replydata):
-        print(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0])} - {bytewise(replydata[1:-1])}")
+        if(isinstance(replydata, int)): print(f"Reply [1]: {hex(replydata)[2:].upper()} - {bytewise(b'')}")
+        else: print(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
 
-    # command wrapper
-    def command(commandStrHex):
-        def command_wrapper(fun):
-            from functools import wraps
-            fun.command = commandStrHex
-            @wraps(fun)
-            def func_wrapper(*args, **kwargs):
-                #TODO: get COMMANDS dict NOT from pulling it out of self.__class__ (that's ridiculous!)
-                args[0].__class__.COMMANDS[fun.__name__] = commandStrHex
-                return fun(*args, **kwargs)
-            return func_wrapper
-        return command_wrapper
 
-    @command('01 01')
-    def checkChannel(self, randomData=False):
+    #API: checkChannel([randomData:bool])
+    #CMD API: chch
+    @Command('01 01', shortcut='chch', required=True, category=Command.Type.UTIL)
+    def checkChannel(self, command, randomData=False):
         if(randomData):
-            dataHexStr = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
+            checkingData = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
         else:
-            dataHexStr = '01 23 45 67 89 AB CD EF'
-                                       # ▼ quite duck_tape'ish, but efficiency doesn't allow to pass 'command' as param
-        self.tr.sendPacket(bytes.fromhex(self.checkChannel.command + dataHexStr))
+            checkingData = bytes.fromhex('01 23 45 67 89 AB CD EF')
+        # 'commandHexStr' may be referenced as 'self.checkChannel.commandHexStr' instead of passing it here as a
+        #  parameter (from decorator), but performance gain of that implementation is probably insignificant
+        #TODO: add decorator to tr.sendPacket() that will automatically add lrc checksum to passed data
+        # if 'tr' would have been initialised with corresponding parameter (create such a parameter)
+        #temporary adding lrc by hand here                         ▼
+        self.tr.sendPacket(bytes.fromhex(command) + checkingData + lrc(bytes.fromhex(command) + checkingData))
         reply = self.tr.receivePacket()
-        if (lrc(reply)):
+
+        if (not lrc(reply)):
             raise BadDataError(f"Bad reply data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
                                             f"got '{bytewise(reply[-1:])}'). Reply discarded")
         self.__printReply(reply)
-        if (reply[1:9] != dataHexStr):
-            raise BadDataError(f"Reply contains bad data (expected '{dataHexStr}', "
+
+        if (reply[0] != self.ACK_OK):
+            raise BadAckError(f"Device returned an error executing command")
+        if (reply[1:9] != checkingData):
+            raise BadDataError(f"Reply contains bad data (expected '{checkingData}', "
                                f"got '{bytewise(reply[1:9])}'). Reply discarded")
         return reply[0] == 0
-    checkChannel.required = True
+
 
 
 
@@ -366,7 +438,7 @@ if __name__ == '__main__':
     def testCheckChannel():
         s = serial.Serial(port=COM, baudrate=921600,
                           bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
-                          write_timeout=1, timeout=1)
+                          write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         with s:
             d1 = '0101 AA BB CC DD EE FF 88 99'
@@ -392,7 +464,7 @@ if __name__ == '__main__':
     def testCheckChannelWrapped():
         s = serial.Serial(port=COM, baudrate=921600,
                           bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
-                          write_timeout=1, timeout=1)
+                          write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         d1 = '0101 AA BB CC DD EE FF 88 99'
         d2 = '0101 a8 ab af aa ac ab a3 aa'
@@ -414,7 +486,7 @@ if __name__ == '__main__':
     def testAssistPacket():
         s = serial.Serial(port=COM, baudrate=921600,
                           bytesize=8, parity=serial.PARITY_ODD, stopbits=1,
-                          write_timeout=1, timeout=5)
+                          write_timeout=TIMEOUT, timeout=5)
         with s:
             time.sleep(1)
             packet = s.read(s.inWaiting())
@@ -472,7 +544,7 @@ if __name__ == '__main__':
 
         s = serial.Serial(port=COM, baudrate=921600,
                           bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
-                          write_timeout=1, timeout=1)
+                          write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         with s:
             data = bytes.fromhex('0107' + 'DE'*369 + '00')
@@ -499,7 +571,7 @@ if __name__ == '__main__':
     def test_double_read():
         s = serial.Serial(port=COM, baudrate=921600,
                           bytesize=8, parity=serial.PARITY_NONE, stopbits=1,
-                          write_timeout=1, timeout=1)
+                          write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         with s:
             data = bytes.fromhex('0101 AA BB CC DD EE FF 88 99')
@@ -521,7 +593,7 @@ if __name__ == '__main__':
     def test_send_command(testReceivePacket):
         class CommandError(RuntimeError): pass
 
-        s = SerialTransceiver(port=COM, baudrate=921600, write_timeout=1, timeout=1)
+        s = SerialTransceiver(port=COM, baudrate=921600, write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         cMsgs = {
             'chch': '0101 AA BB CC DD EE FF 88 99', #check channel
@@ -587,7 +659,6 @@ if __name__ == '__main__':
                     slog.debug(f"Reply data [{len(replydata[:-1])}]: {bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
                     if (command in ('di', 'st',)):
                         slog.debug(f"String: '{replydata[1:-1].decode('utf-8')}'")
-                    s.reset_input_buffer()
 
                 except CommandError as e: log.error(e.args[0])
                 except serial.serialutil.SerialTimeoutException as e: showError(e)
@@ -597,7 +668,7 @@ if __name__ == '__main__':
 
 
     def test_receivePacket():
-        s = SerialTransceiver(port=COM, baudrate=921600, write_timeout=1, timeout=1)
+        s = SerialTransceiver(port=COM, baudrate=921600, write_timeout=TIMEOUT, timeout=TIMEOUT)
 
         cMsgs = {
             'chch': '0101 AA BB CC DD EE FF 88 99',  # check channel
@@ -626,9 +697,45 @@ if __name__ == '__main__':
         print("[DONE]")
 
     def apiTest():
-        p = DspSerialApi()
-        with p.tr:
-            p.checkChannel()
+        assist = DspSerialApi()
+        commands = {command.shortcut: command for command in assist.Command.COMMANDS.values()}
+        print(assist.Command.COMMANDS.values())
+        class CommandError(RuntimeError): pass
+
+        exitcommands = ('quit', 'exit', 'q', 'e')
+        if (any(value in commands for value in exitcommands)):
+            raise AttributeError("Command replicates exit command")
+
+        with assist.tr as com:
+            for i in range(10_000):
+                try:
+                    userinput = input('--> ')
+                    command = userinput.rsplit(' ', 1)[0]
+                    print(commands)
+                    if (command.strip() == ''): continue
+                    if (command in exitcommands):
+                        print("Terminated :)")
+                        break
+                    if (command == 'flush'):
+                        com.reset_input_buffer()
+                        continue
+                    if (command == 'read'):
+                        reply = com.read(com.in_waiting)
+                        print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
+                        continue
+                    if (command == 'test'):
+                        assist.checkChannel()
+                    if (not command in commands): raise CommandError("Wrong command")
+                    else:
+                        try:
+                            commands[command](assist, *userinput.split(' ')[1:])
+                        except IndexError: raise CommandError("API function arguments are incorrect")
+
+                except CommandError as e: showError(e)
+                except SerialCommunicationError as e: showError(e)
+                except serial.serialutil.SerialTimeoutException as e: showError(e)
+                except SerialReadTimeoutError as e: showError(e)
+                except RuntimeError as e: showError(e)
 
     functions = [
         lambda: ...,

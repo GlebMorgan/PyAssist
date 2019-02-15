@@ -34,6 +34,7 @@ TIMEOUT = 0.5
 HEADER_LEN = 6              # in bytes
 STARTBYTE = 0x5A         # type: int
 MASTER_ADDRESS = 0          # should be in reply to host machine
+
 samplepacket = b'Z\x0c\x06\x80\x9fs\x01\x01\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\x00\x0f\xcc'
 samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xcd\x10'
 
@@ -42,36 +43,57 @@ samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xc
 # StartByte - ADR - Length|EVEN - HeaderRFC - COMMAND - CommandData - LRC - PacketRFC
 
 
-# slog - should be used for general serial communication info only
+# slog - should be used for general serial communication info only (packets and timeouts)
 slog = logging.getLogger(__name__+":serial")
 slog.setLevel(logging.DEBUG)
 slog.addHandler(ColorHandler())
 
 #log - should be used for additional detailed info
 log = logging.getLogger(__name__+":main")
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 log.addHandler(ColorHandler())
 log.disabled = False
 
 
+ParseValueError = struct.error  # just an alias
 SerialError = serial.serialutil.SerialException  # just an alias
 SerialWriteTimeoutError = serial.serialutil.SerialTimeoutException  # just an alias
 class SerialReadTimeoutError(SerialError): pass
 
 
-class SerialCommunicationError(RuntimeError):
-    """Application-level errors, indicate the command sent to the device was not properly executed"""
+class SerialCommunicationError(IOError):
+    """Communication-level errors, indicate errors in packet transmission process"""
+
+    def __init__(self, *args, data=None, dataname=None):
+        if (data is not None):
+            if (dataname is None):
+                log.error(f"In call to {self.__class__} - 'dataname' attribute not specified")
+                self.dataname = "Analyzed data"
+            else: self.dataname = dataname
+            self.data = data
+        super().__init__(*args)
 
 
 class BadDataError(SerialCommunicationError):
-    """Data received over serial port is invalid or corrupted"""
+    """Data received over serial port is corrupted"""
+
+
+class DeviceError(RuntimeError):
+    """Application-level errors, indicate the command sent to the device was not properly executed"""
 
 
 class BadAckError(SerialCommunicationError):
     """Devise has sent 'FF' acknowledge byte => error executing command on device side"""
 
+
+class DataInvalidError(DeviceError):
+    """Device reply contains invalid data"""
+
+
 def showError(error):
-    log.error(f"{error.__class__.__name__}: {error.args[0] if error.args else '<No details>'}")
+    log.error(f"{error.__class__.__name__}: {error.args[0] if error.args else '<No details>'}" +
+              (os.linesep + f"{error.dataname}: {bytewise(error.data)}" if hasattr(error, 'data') else ''))
+
 
 
 def showStackTrace(e):
@@ -79,7 +101,10 @@ def showStackTrace(e):
     for line in traceback.format_tb(e.__traceback__):
         if (line): log.error(line.strip())
 
+
 class SerialTransceiver(serial.Serial):
+
+    AUTO_LRC = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -87,6 +112,22 @@ class SerialTransceiver(serial.Serial):
         self.baudrate = 921600
         self.write_timeout = TIMEOUT
         self.timeout = TIMEOUT
+
+
+    class addCRC():
+        """Decorator to sendPacket() method, appending LRC byte to msg"""
+
+        def __init__(self, addLRC):
+            self.addLRC = addLRC
+
+        def __call__(self, sendPacketFunction):
+            if (not self.addLRC):
+                return sendPacketFunction
+            else:
+                @wraps(sendPacketFunction)
+                def sendPacketWrapper(wrappee_self, msg, *args, **kwargs):
+                    return sendPacketFunction(wrappee_self, msg+lrc(msg), *args, **kwargs)
+                return sendPacketWrapper
 
 
     def receivePacket(self):
@@ -113,23 +154,32 @@ class SerialTransceiver(serial.Serial):
         elif (len(bytesReceived) == 0):
             raise SerialReadTimeoutError("No reply")
         elif (len(bytesReceived) < HEADER_LEN):
-            raise BadDataError(f"Bad packet (header too small, [{len(bytesReceived)}] out of [{HEADER_LEN}])")
+            raise BadDataError(f"Bad header (too small, [{len(bytesReceived)}] out of [{HEADER_LEN}])",
+                               dataname="Header", data=bytesReceived)
         else:
-            log.warning("Bad data in front of the stream. Searching for valid header...")
-            for i in range(100):  #TODO: limit infinite loop in a better way
+            if(bytesReceived[0] == STARTBYTE):
+                log.warning(f"Bad header checksum (expected '{bytewise(rfc1071(bytesReceived[:-2]))}', "
+                            f"got '{bytewise(bytesReceived[-2:])}'). Header discarded, searching for valid one...",
+                            dataname="Header", data=bytesReceived)
+            else:
+                log.warning(f"Bad data in front of the stream: [{bytewise(bytesReceived)}]. "
+                            f"Searching for valid header...")
+            for i in range(1, 100):  #TODO: limit infinite loop in a better way
                 while True:
                     startbyteIndex = bytesReceived.find(STARTBYTE)
                     if (startbyteIndex == -1):
                         if (len(bytesReceived) < HEADER_LEN):
-                            raise BadDataError("Bad packet")
+                            raise BadDataError("Failed to find valid header")
                         bytesReceived = self.read(HEADER_LEN)
+                        log.warning(f"Try next {HEADER_LEN} bytes: [{bytewise(bytesReceived)}]")
                     else: break
                 headerReminder = self.read(startbyteIndex)
                 if (len(headerReminder) < startbyteIndex):
-                    raise BadDataError("Bad packet")
+                    raise BadDataError("Bad header", dataname="Header",
+                                       data=bytesReceived[startbyteIndex:]+headerReminder)
                 header = bytesReceived[startbyteIndex:] + headerReminder
                 if (int.from_bytes(rfc1071(header), byteorder='big') == 0):
-                    log.info("Found valid header")
+                    log.info(f"Found valid header at pos {i*HEADER_LEN+startbyteIndex}")
                     return self.__readData(header)
             else: raise RuntimeError("Cannot find header in datastream, too many attempts...")
 
@@ -138,13 +188,19 @@ class SerialTransceiver(serial.Serial):
         datalen, zerobyte = self.__parseHeader(header)
         data = self.read(datalen + 2)  # 2 is wrapper RFC
         if (len(data) < datalen + 2):
-            raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])")
+            raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])",
+                               dataname="Packet", data=header+data)
         if (int.from_bytes(rfc1071(header + data), byteorder='big') == 0):
             slog.debug(f"Reply packet [{len(header+data)}]: {bytewise(header+data)}")
+            if (self.in_waiting != 0):
+                log.warning(f"Unread data ({self.in_waiting} bytes) is left in a serial datastream")
+                self.reset_input_buffer()
+                log.info(f"Serial input buffer flushed")
             return data[:-2] if (not zerobyte) else data[:-3]  # 2 is packet RFC, 1 is zero padding byte
         else:
             raise BadDataError(f"Bad packet checksum (expected '{bytewise(rfc1071(data[:-2]))}', "
-                               f"got '{bytewise(data[-2:])}'). Packet discarded")
+                               f"got '{bytewise(data[-2:])}'). Packet discarded",
+                               dataname="Packet", data=header+data)
 
 
     @staticmethod
@@ -155,17 +211,18 @@ class SerialTransceiver(serial.Serial):
         # unpack header (fixed structure - 6 bytes)
         fields = struct.unpack('< B B H H', header)
         if (fields[1] != MASTER_ADDRESS):
-            raise BadDataError(f"Wrong master address (expected '{MASTER_ADDRESS}', got '{fields[1]}')")
+            raise DataInvalidError(f"Wrong master address (expected '{MASTER_ADDRESS}', got '{fields[1]}')")
         datalen = (fields[2] & 0x0FFF) * 2 # extract size in bytes, not 16-bit words
         zerobyte = (fields[2] & 1<<15) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
         log.debug(f"ZeroByte: {zerobyte == 1}")
         return datalen, zerobyte
 
 
+    @addCRC(AUTO_LRC)
     def sendPacket(self, msg):
         """
         Wrap msg and send packet over serial port
-        For DspAssist protocol - assumed that LRC byte is already appended to msg
+        For DspAssist protocol - if AUTO_LRC is False, it is assumed that LRC byte is already appended to msg
 
         :param msg: binary payload data
         :type msg: bytes
@@ -275,20 +332,10 @@ class DspSerialApi:
 
     ACK_OK = 0x00
     ACK_BAD = 0xFF
-    # STRUCT CODES:
-    # 1 byte (uint8)   -> B
-    # 2 byte (uint16)  -> H
-    # 4 byte (uint32)  -> I
-    # 8 byte (uint64)  -> Q
-    # float  (4 bytes) -> f
-    # double (8 bytes) -> d
-    # char[] (array)   -> s
-
-
-    #TODO: add to every method: method.required = bool() ► denotes command "obligatoriness"
-
-    #TODO: write a decorator that will assign a method attrs (at least, 'required')
-    # and pass inside an appropriate 'command' parameter taken from decorator parameter
+    SELFTEST_TIMEOUT_SEC = 5
+    TESTCHANNEL_DEFAULT_DATALEN = 1023
+    TESTCHANNEL_DEFAULT_DATABYTE = 'AA'
+    MAX_DATA_LEN_REPR = 25
 
 
     def __init__(self):
@@ -296,9 +343,14 @@ class DspSerialApi:
 
 
     class Command():
+        """
+        Command decorator
+        Every command method returns execution result
+        It may be a boolean value (in case no data is required from device) or data of appropriate type
+        """
 
         class Type(Enum):
-            UNSPECIFIED = 0
+            NONE = 0
             UTIL = 1
             PROG = 2
             SIG = 3
@@ -306,7 +358,7 @@ class DspSerialApi:
 
         COMMANDS = {}
 
-        def __init__(self, command, shortcut, required=False, category=Type.UNSPECIFIED):
+        def __init__(self, command, shortcut, required=False, category=Type.NONE):
             if (not isinstance(shortcut, str)): raise TypeError(f"'shortcut' must be a str, not {type(shortcut)}")
             try:
                 if (len(bytes.fromhex(command)) != 2): raise ValueError
@@ -335,40 +387,203 @@ class DspSerialApi:
 
     @staticmethod
     def __printReply(replydata):
-        if(isinstance(replydata, int)): print(f"Reply [1]: {hex(replydata)[2:].upper()} - {bytewise(b'')}")
-        else: print(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
+        if (isinstance(replydata, int)): slog.debug(f"Reply [1]: {hex(replydata)[2:].upper()} - {bytewise(b'')}")
+        else: slog.debug(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
 
 
-    #API: checkChannel([randomData:bool])
-    #CMD API: chch
-    @Command('01 01', shortcut='chch', required=True, category=Command.Type.UTIL)
-    def checkChannel(self, command, randomData=False):
-        if(randomData):
-            checkingData = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
-        else:
-            checkingData = bytes.fromhex('01 23 45 67 89 AB CD EF')
-        # 'commandHexStr' may be referenced as 'self.checkChannel.commandHexStr' instead of passing it here as a
-        #  parameter (from decorator), but performance gain of that implementation is probably insignificant
-        #TODO: add decorator to tr.sendPacket() that will automatically add lrc checksum to passed data
-        # if 'tr' would have been initialised with corresponding parameter (create such a parameter)
-        #temporary adding lrc by hand here                         ▼
-        self.tr.sendPacket(bytes.fromhex(command) + checkingData + lrc(bytes.fromhex(command) + checkingData))
+    def __sendCommand(self, data):
+        """
+        Add LRC byte to command data, send it to the device, receive reply packet,
+            verify lrc and return ACK and reply payload data
+
+        :param data: full command data
+        :type data: bytes
+        :return: 2-element tuple: ACK (boolean) and reply data (bytes), if any
+        :rtype: tuple
+        """
+
+        self.tr.sendPacket(data+lrc(data))
         reply = self.tr.receivePacket()
-
+        if (not reply):
+            raise DataInvalidError("Empty reply")
         if (not lrc(reply)):
-            raise BadDataError(f"Bad reply data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
-                                            f"got '{bytewise(reply[-1:])}'). Reply discarded")
+            raise BadDataError(f"Bad data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
+                               f"got '{bytewise(reply[-1:])}'). Reply discarded", data=reply)
+        ACK = reply[0] == self.ACK_OK
         self.__printReply(reply)
-
-        if (reply[0] != self.ACK_OK):
-            raise BadAckError(f"Device returned an error executing command")
-        if (reply[1:9] != checkingData):
-            raise BadDataError(f"Reply contains bad data (expected '{checkingData}', "
-                               f"got '{bytewise(reply[1:9])}'). Reply discarded")
-        return reply[0] == 0
+        return ACK, reply[1:-1]
 
 
+    @Command(command='01 01', shortcut='chch', required=True, category=Command.Type.UTIL)
+    def checkChannel(self, command, data=None):
+        """ API: checkChannel([data='XX XX ... XX'/'random']) """
 
+        if (data == 'random'): checkingData = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
+        elif (data is None): checkingData = bytes.fromhex('01 23 45 67 89 AB CD EF')
+        else:
+            if (len(data) != 8):
+                raise ValueError("Data length should be 8 bytes")
+            checkingData = bytes.fromhex(data)
+        # 'command' may be referenced as 'self.checkChannel.command' instead of passing it here as a
+        #  parameter (from decorator), but performance gain of that implementation is probably insignificant (?)
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+
+        if (ACK and reply != checkingData):
+            raise DataInvalidError(f"Reply contains bad data (expected [{bytewise(checkingData)}], "
+                                   f"got [{bytewise(reply)}])")
+        return ACK
+
+
+    @Command(command='01 02', shortcut='r', required=False, category=Command.Type.UTIL)
+    def reset(self, command):
+        """ API: reset() """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+        return ACK
+
+
+    @Command(command='01 03', shortcut='i', required=True, category=Command.Type.UTIL)
+    def deviceInfo(self, command):
+        """ API: deviceInfo() """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+        #TODO: here ▼ and in selftest():
+        # .decode may raise an 'utf-8 decode' error
+        # redesign to trim the reply based on zero byte (b'\x00'), not null character ('\0') after data is decoded
+        infoStr = reply.decode('utf-8').split('\0', 1)[0]
+        return infoStr
+
+
+    @Command(command='01 04', shortcut='sm', required=True, category=Command.Type.UTIL)
+    def scanMode(self, command, enable):
+        """API: scanMode('on'/'off') """
+
+        if (enable is True or enable in ('on', 'ON', '+')): command += '01'
+        elif (enable is False or enable in ('off', 'OFF', '-')): command += '00'
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+        return ACK
+
+
+    @Command(command='01 05', shortcut='st', required=False, category=Command.Type.UTIL)
+    def selftest(self, command):
+        """ API: selftest() """
+
+        initTimeout = self.tr.timeout
+        self.tr.timeout = self.SELFTEST_TIMEOUT_SEC
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+        selftestResultStr = reply.decode('utf-8').split('\0', 1)[0]
+        self.tr.timeout = initTimeout
+        return selftestResultStr
+
+
+    @Command(command='01 06', shortcut='ss', required=False, category=Command.Type.UTIL)
+    def saveSettings(self, command):
+        """ API: saveSettings() """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+        return ACK
+
+
+    @Command(command='01 07', shortcut='tch', required=False, category=Command.Type.UTIL)
+    def testChannel(self, command, data=None, N=None):
+        """API: testChannel([data='XX XX ... XX'/'random', N=<data size in bytes> """
+
+        if (N is None): N = self.TESTCHANNEL_DEFAULT_DATALEN
+        elif (N > 1023): raise ValueError("Data length ('N') should be no more than 1023")
+        if (data == 'random'):
+            checkingData = struct.pack(f'< {N}B', *(random.randrange(0, 0x100) for _ in range(N)))
+        elif (data is None):
+            checkingData = bytes.fromhex(self.TESTCHANNEL_DEFAULT_DATABYTE * N)
+        else:
+            log.debug(f"Tch hex data: {data}")
+            checkingData = bytes.fromhex(data[:N*2]) if N>0 else b''
+
+
+        checkingData += b'\x00'
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+
+        if (not ACK): return ACK
+        if (reply != checkingData):
+            raise DataInvalidError(f"Reply contains bad data ("
+                                   f"expected [{bytewise(checkingData, collapseAfter=self.MAX_DATA_LEN_REPR)}], "
+                                   f"got [{bytewise(reply, collapseAfter=self.MAX_DATA_LEN_REPR)}])")
+        return ACK
+
+
+    @Command(command='03 01', shortcut='sc', required=True, category=Command.Type.SIG)
+    def signalsCount(self, command):
+        """ API: signalsCount() """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+        try: nSignals = struct.unpack('< H', reply)[0]
+        except ParseValueError: raise DataInvalidError("Cannot convert number of signals received to integer value")
+        return nSignals
+
+    @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
+    def readSignalsDescriptor(self, command, signal):
+        """ API: readSignalsDescriptor(signal=<signal number>) """
+
+        sigNumBytes = struct.pack('< H', signal)
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + sigNumBytes)
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+
+        paramNames = ('Name', 'TypeClass', 'cType', 'Attrs', 'Parent', 'Period', 'Dimen', 'Factor')
+        try:
+            sigNameEndIndex = reply.index(b'\0')
+            name = reply[:sigNameEndIndex].decode('utf-8')
+            params = struct.unpack(
+                    '< B B I h I B f', reply[sigNameEndIndex + 1:])
+        except ValueError:
+            raise DataInvalidError("Cannot parse signal descriptor field #1 - no null character found")
+        except UnicodeDecodeError:
+            raise DataInvalidError("Cannot parse signal descriptor field #1 - failed to convert data to utf-8 string")
+        except ParseValueError:
+            raise DataInvalidError("Failed to parse signal descriptor structure")
+
+        params = (name,) + params
+
+        paramNameMaxLen = max((len(par) for par in paramNames))
+        # paramsMaxLen = max((len(str(par)) for par in params))
+        log.info(f"Signal #{signal} descriptor parameters:")
+        for name, par in zip(paramNames, params):
+            if (name == 'Attrs'): par =  " ".join(f"{par:06b}")
+            log.info(f"{name.rjust(paramNameMaxLen)} : {par}")
+
+        return params
+
+
+
+
+
+
+    # STRUCT CODES:
+    # 1 byte (uint8)   -> B
+    # 2 byte (uint16)  -> H
+    # 4 byte (uint32)  -> I
+    # 8 byte (uint64)  -> Q
+    # float  (4 bytes) -> f
+    # double (8 bytes) -> d
+    # char[] (array)   -> s
 
 # -------------------------------------------------------------------------------------------------------------------
 
@@ -699,7 +914,6 @@ if __name__ == '__main__':
     def apiTest():
         assist = DspSerialApi()
         commands = {command.shortcut: command for command in assist.Command.COMMANDS.values()}
-        print(assist.Command.COMMANDS.values())
         class CommandError(RuntimeError): pass
 
         exitcommands = ('quit', 'exit', 'q', 'e')
@@ -710,32 +924,41 @@ if __name__ == '__main__':
             for i in range(10_000):
                 try:
                     userinput = input('--> ')
-                    command = userinput.rsplit(' ', 1)[0]
-                    print(commands)
+                    command = userinput.split(' ', 1)[0]
                     if (command.strip() == ''): continue
-                    if (command in exitcommands):
+                    elif (command in exitcommands):
                         print("Terminated :)")
                         break
-                    if (command == 'flush'):
+                    elif (command == 'flush'):
                         com.reset_input_buffer()
-                        continue
-                    if (command == 'read'):
+                    elif (command == 'read'):
                         reply = com.read(com.in_waiting)
                         print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
-                        continue
-                    if (command == 'test'):
-                        assist.checkChannel()
-                    if (not command in commands): raise CommandError("Wrong command")
+                    elif (command.startswith('-')):
+                        try: data = bytes.fromhex("".join(command[1:].split(' ')))
+                        except ValueError: raise CommandError("Wrong hex command")
+                        slog.info(f"Data [{len(data)}]: {bytewise(data[:2])} - {bytewise(data[2:])}")
+                        packet = wrap(data + lrc(data), adr=12)
+                        com.sendPacket(data + lrc(data))
+                        replydata = com.receivePacket()
+                        slog.info(f"Reply data [{len(replydata[:-1])}]: "
+                                   f"{bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
+                    elif (command.startswith('>')):
+                        print(eval(userinput[1:]))
+                    elif (not command in commands): raise CommandError("Wrong command")
                     else:
                         try:
-                            commands[command](assist, *userinput.split(' ')[1:])
-                        except IndexError: raise CommandError("API function arguments are incorrect")
+                            print(commands[command](assist, *(eval(arg) for arg in userinput.split(' ')[1:])))
+                        except TypeError as e:
+                            if (f"{commands[command].__name__}()" in e.args[0]):
+                                raise CommandError("Wrong arguments!" + os.linesep + e.args[0])
+                            else: raise
 
                 except CommandError as e: showError(e)
                 except SerialCommunicationError as e: showError(e)
-                except serial.serialutil.SerialTimeoutException as e: showError(e)
-                except SerialReadTimeoutError as e: showError(e)
-                except RuntimeError as e: showError(e)
+                except SerialError as e: showError(e)
+                except DeviceError as e: showError(e)
+                except Exception as e: showStackTrace(e)
 
     functions = [
         lambda: ...,

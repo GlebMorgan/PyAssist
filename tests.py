@@ -1,31 +1,28 @@
-import traceback
-from itertools import count
 import logging
-from colored_logger import ColorHandler
 import os
 import sys
-import pickle
-import time
-import math
 import random
-import serial
-import bits
 import string
-from autorepr import autorepr
-
 import struct
-from utils import bytewise, bitwise, legacy
+import time
+import traceback
+from enum import Enum
+from functools import wraps
+from math import ceil
+
+import bits
+import progressbar
+import serial
+from autorepr import autorepr
 from checksums import rfc1071, lrc
 from timer import Timer
-from math import ceil
-from enum import Enum
+from utils import bytewise, bitwise, legacy
 
-from functools import wraps
+from colored_logger import ColorHandler
 
 
-'''
-(http://plaintexttools.github.io/plain-text-table)
-'''
+''' (http://plaintexttools.github.io/plain-text-table) '''
+
 
 #TODO: application params (just globals for now)
 COM = 'COM6'
@@ -35,9 +32,6 @@ HEADER_LEN = 6              # in bytes
 STARTBYTE = 0x5A         # type: int
 MASTER_ADDRESS = 0          # should be in reply to host machine
 
-samplepacket = b'Z\x0c\x06\x80\x9fs\x01\x01\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\x00\x0f\xcc'
-samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xcd\x10'
-
 
 # 1           2     3:4           5:6         7:8       9:...         -3    -2:-1
 # StartByte - ADR - Length|EVEN - HeaderRFC - COMMAND - CommandData - LRC - PacketRFC
@@ -45,12 +39,12 @@ samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xc
 
 # slog - should be used for general serial communication info only (packets and timeouts)
 slog = logging.getLogger(__name__+":serial")
-slog.setLevel(logging.DEBUG)
+slog.setLevel(logging.WARNING)
 slog.addHandler(ColorHandler())
 
 #log - should be used for additional detailed info
 log = logging.getLogger(__name__+":main")
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.WARNING)
 log.addHandler(ColorHandler())
 log.disabled = False
 
@@ -427,6 +421,7 @@ class DspSerialApi:
 
 
         def __init__(self, sigNum=None, params=None, **kwargs):
+            #TODO: add 'nChildren' field for node signals (for non nodes that could be 'None' or just '0')
             if (sigNum is not None and params is not None):
                 if (not hasattr(params, '__iter__')):
                     raise TypeError("'params' should be an iterable containing descriptor parameters")
@@ -715,8 +710,8 @@ class DspSerialApi:
 
 
     @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
-    def readSignalsDescriptor(self, command, signalNum):
-        """ API: readSignalsDescriptor(signalNum=<signalNum number>) """
+    def readSignalDescriptor(self, command, signalNum):
+        """ API: readSignalDescriptor(signalNum=<signalNum number>) """
 
         sigNumBytes = struct.pack('< H', signalNum)
         ACK, reply = self.__sendCommand(bytes.fromhex(command) + sigNumBytes)
@@ -749,7 +744,7 @@ class DspSerialApi:
 
     @Command(command='03 03', shortcut='ms', required=False, category=Command.Type.SIG)
     def manageSignal(self, command, signal, mode, value=None):
-        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<none|fix|sign>')
+        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<none|fix|sign>, [value=<signal value>]')
         if method is called with no signal value, it just changes signal mode without changing signal value """
 
         # check 'mode' argument
@@ -764,7 +759,7 @@ class DspSerialApi:
 
         # check 'signal' argument
         if (isinstance(signal, int)):
-            signal = self.readSignalsDescriptor(signal)
+            signal = self.readSignalDescriptor(signal)
         elif (not isinstance(signal, self.Signal)):
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
@@ -801,7 +796,7 @@ class DspSerialApi:
         """ API: readSignal(signal=Signal()/<signal number>) """
 
         if (isinstance(signal, int)):
-            signal = self.readSignalsDescriptor(signal)
+            signal = self.readSignalDescriptor(signal)
         elif (not isinstance(signal, self.Signal)):
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
@@ -814,6 +809,27 @@ class DspSerialApi:
                                    f"[{bytewise(reply)}]")
         return sigVal
 
+
+    def scanSignals(self, attempts=2):
+        nSignals = self.signalsCount()
+        signalDescriptors = []
+        failedSignalIndices = []
+
+        progressbarElements = (
+            progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
+            ' ',
+            progressbar.Percentage()
+        )
+        progress = progressbar.ProgressBar(widgets=progressbarElements)
+
+        for signalNum in progress(range(nSignals)):
+            for _ in range(attempts):
+                currSignal = self.readSignalDescriptor(signalNum)
+                if (currSignal):
+                    signalDescriptors.append(currSignal)
+                    break
+            else: failedSignalIndices.append(signalNum)
+        return tuple(signalDescriptors), tuple(failedSignalIndices)
 
 
     # STRUCT CODES:
@@ -868,13 +884,6 @@ def unwrap(packet):
     zerobyte = (fields[2] & 0x8000) >> 15 # extract EVEN flag (b15 in LSB / b7 in MSB)
     print(f"Zbyte: {zerobyte == 1}")
     return packet[6:6+datalen-zerobyte]
-
-
-def parseSignalDescriptor(data): # 6F 77 6C 56 6F 6C 74 61 67 65 00 00 07 08 00 00 00 FF FF 10 27 00 00 00 00 00 80 3F
-    # assumes COMMAND is '03 02'
-    sigName, fields = data.split(b'\0', 1)
-    fields = struct.unpack('< B B ')
-    ...
 
 
 # -------------------------------------------------------------------------------------------------------------------
@@ -980,6 +989,8 @@ if __name__ == '__main__':
 
 
     def test_unwrap():
+        samplepacket = b'Z\x0c\x06\x80\x9fs\x01\x01\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\x00\x0f\xcc'
+        samplereply = b'Z\x00\x05\x00\xa0\xff\x00\xaa\xbb\xcc\xdd\xee\xff\x88\x99\x00\xcd\x10'
         d1 = '0101 AA BB CC DD EE FF 88 99'
         d2 = '0101 a8 ab af aa ac ab a3 aa'
         d3 = '0102'
@@ -1188,16 +1199,29 @@ if __name__ == '__main__':
                     userinput = input('--> ')
                     command = userinput.split(maxsplit=1)[0]
                     if (command.strip() == ''): continue
+
                     elif (command in exitcommands):
                         print("Terminated :)")
                         break
+
                     elif (command == 'help' or command == 'h'):
                         __showHelp(userinput)
+
                     elif (command == 'flush'):
                         com.reset_input_buffer()
+
                     elif (command == 'read'):
                         reply = com.read(com.in_waiting)
                         print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
+
+                    elif (command == 'scans'):
+                        with Timer("scan signals"):
+                            signals, failedSignals = assist.scanSignals()
+                        if (failedSignals):
+                            log.warning(f"{len(failedSignals)} signals failed to scan: "
+                                        f"{tuple(sigNum for sigNum in failedSignals)}")
+                        print(tuple(sig.name for sig in signals))
+
                     elif (command.startswith('-')):
                         try: data = bytes.fromhex("".join(command[1:].split(' ')))
                         except ValueError: raise CommandError("Wrong hex command")
@@ -1207,9 +1231,12 @@ if __name__ == '__main__':
                         replydata = com.receivePacket()
                         slog.info(f"Reply data [{len(replydata[:-1])}]: "
                                    f"{bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
+
                     elif (command.startswith('>')):
                         print(eval(userinput[1:]))
+
                     elif (not command in commands): raise CommandError("Wrong command")
+
                     else:
                         try:
                             print(commands[command](assist, *(eval(arg) for arg in userinput.split()[1:])))

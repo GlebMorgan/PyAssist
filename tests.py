@@ -810,18 +810,18 @@ class DspSerialApi:
         return sigVal
 
 
-    def scanSignals(self, attempts=2):
+    def scanSignals(self, attempts=2, showProgress=False):
         nSignals = self.signalsCount()
         signalDescriptors = []
         failedSignalIndices = []
-
-        progressbarElements = (
-            progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
-            ' ',
-            progressbar.Percentage()
-        )
-        progress = progressbar.ProgressBar(widgets=progressbarElements)
-
+        if (showProgress):
+            progressbarElements = (
+                progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
+                ' ',
+                progressbar.Percentage()
+            )
+            progress = progressbar.ProgressBar(widgets=progressbarElements, fd=sys.stdout)
+        else: progress = iter
         for signalNum in progress(range(nSignals)):
             for _ in range(attempts):
                 currSignal = self.readSignalDescriptor(signalNum)

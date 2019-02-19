@@ -68,4 +68,4 @@ class ColorHandler(logging.StreamHandler):
 
     def emit(self, record):
         color = __class__.msg_colors.get(record.levelno, "blue")
-        self.stream.write(record.msg + "\n", color)
+        self.stream.write(str(record.msg) + "\n", color)

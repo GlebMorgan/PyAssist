@@ -6,20 +6,20 @@ import os
 import sys
 import pickle
 import time
-
 import math
 import random
 import serial
-import sys
+import bits
+import string
+from autorepr import autorepr
 
 import struct
+from utils import bytewise, bitwise, legacy
 from checksums import rfc1071, lrc
 from timer import Timer
-from utils import bytewise, bitwise, legacy
 from math import ceil
 from enum import Enum
 
-import bits
 from functools import wraps
 
 
@@ -62,7 +62,7 @@ class SerialReadTimeoutError(SerialError): pass
 
 
 class SerialCommunicationError(IOError):
-    """Communication-level errors, indicate errors in packet transmission process"""
+    """Communication-level error, indicate failure in packet transmission process"""
 
     def __init__(self, *args, data=None, dataname=None):
         if (data is not None):
@@ -79,7 +79,7 @@ class BadDataError(SerialCommunicationError):
 
 
 class DeviceError(RuntimeError):
-    """Application-level errors, indicate the command sent to the device was not properly executed"""
+    """Firmware-level error, indicate the command sent to the device was not properly executed"""
 
 
 class BadAckError(SerialCommunicationError):
@@ -88,6 +88,10 @@ class BadAckError(SerialCommunicationError):
 
 class DataInvalidError(DeviceError):
     """Device reply contains invalid data"""
+
+
+class CommandError(RuntimeError):
+    """Application-level error, indicates invalid command signature or parameters"""
 
 
 def showError(error):
@@ -181,7 +185,9 @@ class SerialTransceiver(serial.Serial):
                 if (int.from_bytes(rfc1071(header), byteorder='big') == 0):
                     log.info(f"Found valid header at pos {i*HEADER_LEN+startbyteIndex}")
                     return self.__readData(header)
-            else: raise RuntimeError("Cannot find header in datastream, too many attempts...")
+            else: raise SerialCommunicationError("Cannot find header in datastream, too many attempts...")
+        #TODO: still have unread data at the end of the serial stream.
+        # scenario that once caused the issue: send 'ms 43 0' without adding a signal value (need to alter the code)
 
 
     def __readData(self, header):
@@ -330,6 +336,15 @@ def old_command_decorator(commandStrHex, required=False, type='UNSPECIFIED'):
 
 class DspSerialApi:
 
+    # STRUCT CODES:
+    # 1 byte (uint8)   -> B
+    # 2 byte (uint16)  -> H
+    # 4 byte (uint32)  -> I
+    # 8 byte (uint64)  -> Q
+    # float  (4 bytes) -> f
+    # double (8 bytes) -> d
+    # char[] (array)   -> s
+
     ACK_OK = 0x00
     ACK_BAD = 0xFF
     SELFTEST_TIMEOUT_SEC = 5
@@ -341,6 +356,104 @@ class DspSerialApi:
     def __init__(self):
         self.tr = SerialTransceiver()
 
+    class Signal():
+
+        # these are Signal() attributes after object initialization ▼
+        paramNames = ('Name', 'Class', 'Type', 'Attrs', 'Parent', 'Period', 'Dimen', 'Factor')
+
+        attrsNames = ('control', 'node', 'signature', 'read', 'setting', 'telemetry')
+        paramNamesMaxLen = max((len(par) for par in paramNames))
+        attrNamesMaxLen = max((len(attr) for attr in attrsNames))
+
+        # paramsMaxLen = max((len(str(par)) for par in params))
+
+        Class = {
+            0: 'VAR',
+            1: 'ARRAY',
+            2: 'MATRIX',
+        }
+
+        Type = {
+            0: 'string',
+            1: 'bool',
+            2: 'byte',
+            3: 'uint',
+            4: 'int',
+            5: 'long',
+            6: 'ulong',
+            7: 'float',
+        }
+
+        structTypeCode = {
+            0: NotImplemented,
+            1: 'B',   # uint_8  -> 1 byte
+            2: 'B',   # uint_8  -> 1 byte
+            3: 'H',   # uint_16 -> 2 bytes
+            4: 'h',    # int_16  -> 2 bytes
+            5: 'i',   # int_32  -> 4 bytes
+            6: 'I',  # uint_32 -> 4 bytes
+            7: 'f',  # float   -> 4 bytes
+        }
+
+        Dimen = {
+            0: '',
+            1: 'V',
+            2: 'A',
+            3: '°',
+            4: 'rad',
+            5: 'm',
+            6: 'V/°C',
+            7: 'm/s',
+            8: '°C',
+            9: '°C/s',
+        }
+
+
+        def __init__(self, sigNum=None, params=None, **kwargs):
+            if (sigNum is not None and params is not None):
+                if (not hasattr(params, '__iter__')):
+                    raise TypeError("'params' should be an iterable containing descriptor parameters")
+                if (len(params) != len(self.paramNames)):
+                    raise TypeError("Wrong number of parameters")
+                self.n = sigNum
+                for name, par in zip(self.paramNames, params): setattr(self, name.lower(), par)
+            elif (kwargs):
+                for name, par in kwargs:
+                    try:
+                        setattr(self, name.lower(), par)
+                    except TypeError: raise ValueError(f"Parameter {name}={par} is not valid signal object attribute")
+            else: raise TypeError(f"[Signal number + parameters iterable] OR [all parameters as keywords] signature "
+                                  f"expected in call to {self.__class__.__name__}()")
+
+
+        __repr__ = autorepr("{self.name} ({self.type})")
+
+
+        def showSigDescriptor(self):
+            descriptorStrLines = [f"Signal #{self.n} descriptor:"]
+            for name in self.paramNames:
+                par = getattr(self, name.lower())
+                if (name == 'Attrs'):
+                    # attrs as flags sequence ▼
+                    descriptorStrLines.append(f"""{name.rjust(self.paramNamesMaxLen)} : {" ".join(f"{par:06b}")}""")
+                    # attrs as list (parsed) ▼
+                    for nAttr, attrName in enumerate(self.attrsNames):
+                        descriptorStrLines.append(f"{attrName.rjust(self.paramNamesMaxLen + self.attrNamesMaxLen)} = "
+                                 f"{bits.flag(par, nAttr)}")
+                    continue
+                if (hasattr(self, name) and isinstance(getattr(self, name), dict)):
+                    par = getattr(self, name)[par] or '<None>'
+                descriptorStrLines.append(f"{name.rjust(self.paramNamesMaxLen)} : {par}")
+            return os.linesep.join(descriptorStrLines)
+
+
+        def __str__(self):
+            attrsList = ', '.join(
+                    (attrName for nAttr, attrName in enumerate(self.attrsNames) if bits.flag(self.attrs, nAttr))
+            )
+            return f"Signal #{self.n} - {self.name} <{self.Type[self.type]}>, " \
+                   f"attrs=({attrsList}), parent={self.parent}"
+
 
     class Command():
         """
@@ -349,6 +462,9 @@ class DspSerialApi:
         It may be a boolean value (in case no data is required from device) or data of appropriate type
         """
 
+        # map [full command method names] to [command methods themselves] ▼
+        COMMANDS = {}
+
         class Type(Enum):
             NONE = 0
             UTIL = 1
@@ -356,14 +472,13 @@ class DspSerialApi:
             SIG = 3
             TELE = 4
 
-        COMMANDS = {}
-
         def __init__(self, command, shortcut, required=False, category=Type.NONE):
-            if (not isinstance(shortcut, str)): raise TypeError(f"'shortcut' must be a str, not {type(shortcut)}")
+            if (not isinstance(shortcut, str)):
+                raise TypeError(f"'{shortcut.__name__}' must be a str, not {type(shortcut)}")
             try:
                 if (len(bytes.fromhex(command)) != 2): raise ValueError
             except (ValueError, TypeError):
-                raise TypeError("command' is not a valid 2 bytes hex string representation")
+                raise ValueError(f"'{command.__name__}' is not a valid 2 bytes hex string representation")
 
             self.shortcut = shortcut
             self.command = command
@@ -375,6 +490,7 @@ class DspSerialApi:
             @wraps(fun)
             def fun_wrapper(*args, **kwargs):
                 args = (args[0], self.command) + args[1:]
+                log.info(f"Command: {fun.__name__}")
                 return fun(*args, **kwargs)
 
             fun_wrapper.command = self.command
@@ -414,6 +530,50 @@ class DspSerialApi:
         return ACK, reply[1:-1]
 
 
+    def getCommandApi(self, commandMethod):
+        try: commandDocstring = commandMethod.__doc__
+        except KeyError: raise AttributeError(f"Command method not found in {self.__class__.__name__} command API")
+        if (commandDocstring is None): return '<Not found>'
+        try:
+            methodNameStartIndex = commandDocstring.index('API: ') + 5
+        except ValueError:
+            raise ValueError(f"Cannot find API siganture in {commandMethod.__name__} method docstring")
+        methodName = commandMethod.__name__
+        bracketsLevel = 0
+        for pos, char in enumerate(commandDocstring[methodNameStartIndex:], start=methodNameStartIndex):
+            if (char == '('):
+                if (bracketsLevel == 0):
+                    openBracketIndex = pos
+
+                    apiName = commandDocstring[methodNameStartIndex:openBracketIndex]
+                    if (not frozenset(apiName).issubset(frozenset(string.ascii_letters + '_'))):
+                        raise ValueError(f"Invalid API singature method name '{apiName}'")
+                    if (apiName != methodName):
+                        raise ValueError(f"API signature method name '{apiName}' "
+                                         f"does not match actual command method name '{methodName}'")
+                bracketsLevel += 1
+            elif (char == ')'):
+                bracketsLevel -= 1
+                if (bracketsLevel == 0):
+                    closeBracketIndex = pos
+                    break
+        try: return commandDocstring[methodNameStartIndex:closeBracketIndex+1]
+        except NameError: return f"{methodName}: {commandDocstring[methodNameStartIndex:]}"
+
+
+    """
+    DocString command method API micro-syntax:
+    
+    (_, _, ..., _) - method parameters
+    [...]          - optional parameter
+    .../...        - variations of parameter type
+    ...|...        - variations of parameter value
+    <...>          - lexeme grouping (just like usual parenthesis
+    ...            - arbitrary number of elements
+    
+    """
+
+
     @Command(command='01 01', shortcut='chch', required=True, category=Command.Type.UTIL)
     def checkChannel(self, command, data=None):
         """ API: checkChannel([data='XX XX ... XX'/'random']) """
@@ -421,9 +581,9 @@ class DspSerialApi:
         if (data == 'random'): checkingData = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
         elif (data is None): checkingData = bytes.fromhex('01 23 45 67 89 AB CD EF')
         else:
-            if (len(data) != 8):
-                raise ValueError("Data length should be 8 bytes")
+            if (len(data) != 8): raise CommandError("Data length should be 8 bytes")
             checkingData = bytes.fromhex(data)
+
         # 'command' may be referenced as 'self.checkChannel.command' instead of passing it here as a
         #  parameter (from decorator), but performance gain of that implementation is probably insignificant (?)
         ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
@@ -501,10 +661,10 @@ class DspSerialApi:
 
     @Command(command='01 07', shortcut='tch', required=False, category=Command.Type.UTIL)
     def testChannel(self, command, data=None, N=None):
-        """API: testChannel([data='XX XX ... XX'/'random', N=<data size in bytes> """
+        """API: testChannel([data='XX XX ... XX'/'random', N=<data size in bytes>) """
 
         if (N is None): N = self.TESTCHANNEL_DEFAULT_DATALEN
-        elif (N > 1023): raise ValueError("Data length ('N') should be no more than 1023")
+        elif (N > 1023): raise CommandError("Data length ('N') should be no more than 1023")
         if (data == 'random'):
             checkingData = struct.pack(f'< {N}B', *(random.randrange(0, 0x100) for _ in range(N)))
         elif (data is None):
@@ -512,7 +672,6 @@ class DspSerialApi:
         else:
             log.debug(f"Tch hex data: {data}")
             checkingData = bytes.fromhex(data[:N*2]) if N>0 else b''
-
 
         checkingData += b'\x00'
         ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
@@ -538,41 +697,98 @@ class DspSerialApi:
         return nSignals
 
     @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
-    def readSignalsDescriptor(self, command, signal):
-        """ API: readSignalsDescriptor(signal=<signal number>) """
+    def readSignalsDescriptor(self, command, signalNum):
+        """ API: readSignalsDescriptor(signalNum=<signalNum number>) """
 
-        sigNumBytes = struct.pack('< H', signal)
+        sigNumBytes = struct.pack('< H', signalNum)
         ACK, reply = self.__sendCommand(bytes.fromhex(command) + sigNumBytes)
 
         if (not ACK): return ACK
         if (not reply): raise DataInvalidError("Empty data")
 
-        paramNames = ('Name', 'TypeClass', 'cType', 'Attrs', 'Parent', 'Period', 'Dimen', 'Factor')
         try:
-            sigNameEndIndex = reply.index(b'\0')
-            name = reply[:sigNameEndIndex].decode('utf-8')
-            params = struct.unpack(
-                    '< B B I h I B f', reply[sigNameEndIndex + 1:])
+            sigNameEndIndex = reply.find(b'\0')
         except ValueError:
-            raise DataInvalidError("Cannot parse signal descriptor field #1 - no null character found")
+            raise DataInvalidError("Cannot parse signalNum descriptor field #1 - no null character found")
+        try:
+            name = reply[:sigNameEndIndex].decode('utf-8')
         except UnicodeDecodeError:
-            raise DataInvalidError("Cannot parse signal descriptor field #1 - failed to convert data to utf-8 string")
+            raise DataInvalidError("Cannot parse signalNum descriptor field #1 - failed to convert data to utf-8 string")
+        try:
+            params = struct.unpack('< B B I h I B f', reply[sigNameEndIndex + 1:])
         except ParseValueError:
-            raise DataInvalidError("Failed to parse signal descriptor structure")
+            if (int.from_bytes(reply[sigNameEndIndex + 1], byteorder='little') > 0):
+                raise NotImplementedError("Complex type class signals is not currently supported")
+            raise DataInvalidError("Failed to parse signalNum descriptor structure")
 
         params = (name,) + params
-
-        paramNameMaxLen = max((len(par) for par in paramNames))
-        # paramsMaxLen = max((len(str(par)) for par in params))
-        log.info(f"Signal #{signal} descriptor parameters:")
-        for name, par in zip(paramNames, params):
-            if (name == 'Attrs'): par =  " ".join(f"{par:06b}")
-            log.info(f"{name.rjust(paramNameMaxLen)} : {par}")
-
-        return params
+        signal = self.Signal(signalNum, params)
+        log.info(signal.showSigDescriptor())
+        return signal
 
 
+    @Command(command='03 03', shortcut='ms', required=False, category=Command.Type.SIG)
+    def manageSignal(self, command, signal, mode, value=None):
+        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<none|fix|sign>')
+        if method is called with no signal value, it just changes signal mode without changing signal value """
 
+        # check 'mode' argument
+        modes = ('none', 'fix', 'sign')
+        if (isinstance(mode, str)):
+            try: mode = modes.index(mode)
+            except ValueError:
+                raise CommandError(f"Mode '{mode}' is invalid. "
+                                 f"""Should be within ({', '.join(f"'{s}'" for s in modes)})""")
+        if (mode == 2): raise NotImplementedError("Signature control mode is not currently supported")
+        elif (mode > 2): raise CommandError(f"Mode {mode} is invalid. Should be within [0, 1, 2]")
+
+        # check 'signal' argument
+        if (isinstance(signal, int)):
+            signal = self.readSignalsDescriptor(signal)
+        elif (not isinstance(signal, self.Signal)):
+            raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
+
+        #check 'value' argument
+        if (value is None): value = self.readSignal(signal)  #TODO: implement 'readSignal()' and test functionality
+
+        # pack and send command
+        commandParams = struct.pack('< H B', signal.n, mode)
+        commandValue = struct.pack(f'< {self.Signal.structTypeCode[signal.type]}', value)
+        # log.debug(f"Signal number and mode - {signal.n}, {mode}")
+        # log.debug(f"Packed - {bytewise(commandParams)}")
+        # log.debug(f"Signal value - {value}")
+        # log.debug(f"Packed - {bytewise(commandValue)}")
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + commandParams + commandValue)
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+        return ACK
+
+
+    @Command(command='01 04', shortcut='ssg', required=False, category=Command.Type.SIG)
+    def setSignature(self, command, *args):
+        """ API: NotImplemented"""
+        return NotImplemented
+
+
+    @Command(command='01 05', shortcut='rs', required=False, category=Command.Type.SIG)
+    def readSignal(self, command, signal):
+        """ API: readSignal(signal=Signal()/<signal number>) """
+
+        if (isinstance(signal, int)):
+            signal = self.readSignalsDescriptor(signal)
+        elif (not isinstance(signal, self.Signal)):
+            raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+
+        #TODO: parse reply
+
+        return ACK
 
 
 
@@ -912,23 +1128,47 @@ if __name__ == '__main__':
         print("[DONE]")
 
     def apiTest():
+
+        def __showHelp(inputParameters):
+            try: requestApiCommand = inputParameters.split(maxsplit=1)[1]
+            except IndexError:
+                # command is just "help" → show all commands signatures
+                print("Commands API:")
+                for apiCommandMethod in assist.Command.COMMANDS.values():
+                    print(f"{apiCommandMethod.shortcut:>5} - {assist.getCommandApi(apiCommandMethod)}")
+            else:
+                # command contains explicit API command → show signature of requested command only
+                if (requestApiCommand in (fun.__name__ for fun in assist.Command.COMMANDS.values())):
+                    # requested API command is a full command method name
+                    print(f"API: {assist.getCommandApi(assist.Command.COMMANDS[requestApiCommand])}")
+                elif (requestApiCommand in (fun.shortcut for fun in assist.Command.COMMANDS.values())):
+                    # requested API command is a shortcut
+                    print(f"API: {assist.getCommandApi(commands[requestApiCommand])}")
+                else:
+                    # requested API command is invalid
+                    raise CommandError(f"Cannot find API method name / shortcut '{requestApiCommand}'")
+
         assist = DspSerialApi()
+
+        # map [API method shortcuts] to [method objects themselves] ▼
         commands = {command.shortcut: command for command in assist.Command.COMMANDS.values()}
-        class CommandError(RuntimeError): pass
 
         exitcommands = ('quit', 'exit', 'q', 'e')
-        if (any(value in commands for value in exitcommands)):
-            raise AttributeError("Command replicates exit command")
+        reservedcommands = ('help', 'h', 'read', 'flush')
+        if (any(value in commands for value in exitcommands + reservedcommands)):
+            raise AssertionError("One ore more API commands duplicate reserved command")
 
         with assist.tr as com:
             for i in range(10_000):
                 try:
                     userinput = input('--> ')
-                    command = userinput.split(' ', 1)[0]
+                    command = userinput.split(maxsplit=1)[0]
                     if (command.strip() == ''): continue
                     elif (command in exitcommands):
                         print("Terminated :)")
                         break
+                    elif (command == 'help' or command == 'h'):
+                        __showHelp(userinput)
                     elif (command == 'flush'):
                         com.reset_input_buffer()
                     elif (command == 'read'):
@@ -948,7 +1188,7 @@ if __name__ == '__main__':
                     elif (not command in commands): raise CommandError("Wrong command")
                     else:
                         try:
-                            print(commands[command](assist, *(eval(arg) for arg in userinput.split(' ')[1:])))
+                            print(commands[command](assist, *(eval(arg) for arg in userinput.split()[1:])))
                         except TypeError as e:
                             if (f"{commands[command].__name__}()" in e.args[0]):
                                 raise CommandError("Wrong arguments!" + os.linesep + e.args[0])
@@ -958,6 +1198,7 @@ if __name__ == '__main__':
                 except SerialCommunicationError as e: showError(e)
                 except SerialError as e: showError(e)
                 except DeviceError as e: showError(e)
+                except NotImplementedError as e: showError(e)
                 except Exception as e: showStackTrace(e)
 
     functions = [

@@ -91,7 +91,7 @@ class DataInvalidError(DeviceError):
 
 
 class CommandError(RuntimeError):
-    """Application-level error, indicates invalid command signature or parameters"""
+    """Application-level error, indicates invalid command signature / parameters / semantics"""
 
 
 def showError(error):
@@ -109,6 +109,7 @@ def showStackTrace(e):
 class SerialTransceiver(serial.Serial):
 
     AUTO_LRC = False
+    RFC_CHECK_DISABLED = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -151,8 +152,9 @@ class SerialTransceiver(serial.Serial):
 
         bytesReceived = self.read(HEADER_LEN)
 
+        # TODO: byteorder here ▼ and everywhere - ?
         if (len(bytesReceived) == HEADER_LEN and bytesReceived[0] == STARTBYTE and
-                int.from_bytes(rfc1071(bytesReceived), byteorder='big') == 0):  #TODO: byteorder here and everywhere - ?
+                (self.RFC_CHECK_DISABLED or int.from_bytes(rfc1071(bytesReceived), byteorder='big') == 0)):
             header = bytesReceived
             return self.__readData(header)
         elif (len(bytesReceived) == 0):
@@ -182,11 +184,11 @@ class SerialTransceiver(serial.Serial):
                     raise BadDataError("Bad header", dataname="Header",
                                        data=bytesReceived[startbyteIndex:]+headerReminder)
                 header = bytesReceived[startbyteIndex:] + headerReminder
-                if (int.from_bytes(rfc1071(header), byteorder='big') == 0):
+                if (self.RFC_CHECK_DISABLED or int.from_bytes(rfc1071(header), byteorder='big') == 0):
                     log.info(f"Found valid header at pos {i*HEADER_LEN+startbyteIndex}")
                     return self.__readData(header)
             else: raise SerialCommunicationError("Cannot find header in datastream, too many attempts...")
-        #TODO: still have unread data at the end of the serial stream.
+        #TODO: still have unread data at the end of the serial stream sometimes.
         # scenario that once caused the issue: send 'ms 43 0' without adding a signal value (need to alter the code)
 
 
@@ -196,7 +198,7 @@ class SerialTransceiver(serial.Serial):
         if (len(data) < datalen + 2):
             raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])",
                                dataname="Packet", data=header+data)
-        if (int.from_bytes(rfc1071(header + data), byteorder='big') == 0):
+        if (self.RFC_CHECK_DISABLED or int.from_bytes(rfc1071(header + data), byteorder='big') == 0):
             slog.debug(f"Reply packet [{len(header+data)}]: {bytewise(header+data)}")
             if (self.in_waiting != 0):
                 log.warning(f"Unread data ({self.in_waiting} bytes) is left in a serial datastream")
@@ -358,6 +360,21 @@ class DspSerialApi:
 
     class Signal():
 
+        class TypeName(Enum):
+            String = 0
+            Bool   = 1
+            Byte   = 2
+            Uint   = 3
+            Int    = 4
+            Long   = 5
+            Ulong  = 6
+            Float  = 7
+
+        class ClassName(Enum):
+            VAR    = 0
+            ARRAY  = 1
+            MATRIX = 2
+
         # these are Signal() attributes after object initialization ▼
         paramNames = ('Name', 'Class', 'Type', 'Attrs', 'Parent', 'Period', 'Dimen', 'Factor')
 
@@ -426,7 +443,7 @@ class DspSerialApi:
                                   f"expected in call to {self.__class__.__name__}()")
 
 
-        __repr__ = autorepr("{self.name} ({self.type})")
+        __repr__ = autorepr("{self.name} <{self.Signal.Type[self.type]}>")
 
 
         def showSigDescriptor(self):
@@ -696,6 +713,7 @@ class DspSerialApi:
         except ParseValueError: raise DataInvalidError("Cannot convert number of signals received to integer value")
         return nSignals
 
+
     @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
     def readSignalsDescriptor(self, command, signalNum):
         """ API: readSignalsDescriptor(signalNum=<signalNum number>) """
@@ -709,17 +727,19 @@ class DspSerialApi:
         try:
             sigNameEndIndex = reply.find(b'\0')
         except ValueError:
-            raise DataInvalidError("Cannot parse signalNum descriptor field #1 - no null character found")
+            raise DataInvalidError(f"Cannot parse descriptor #{signalNum} field #1 - no null character found")
         try:
             name = reply[:sigNameEndIndex].decode('utf-8')
         except UnicodeDecodeError:
-            raise DataInvalidError("Cannot parse signalNum descriptor field #1 - failed to convert data to utf-8 string")
+            raise DataInvalidError(f"Cannot parse descriptor #{signalNum} field #1 - "
+                                   f"failed to convert data to utf-8 string")
         try:
             params = struct.unpack('< B B I h I B f', reply[sigNameEndIndex + 1:])
         except ParseValueError:
             if (int.from_bytes(reply[sigNameEndIndex + 1], byteorder='little') > 0):
-                raise NotImplementedError("Complex type class signals is not currently supported")
-            raise DataInvalidError("Failed to parse signalNum descriptor structure")
+                raise NotImplementedError("Complex type class signals are not supported")
+            raise DataInvalidError(f"Failed to parse descriptor #{signalNum} structure: "
+                                   f"[{bytewise(reply[sigNameEndIndex + 1:])}]")
 
         params = (name,) + params
         signal = self.Signal(signalNum, params)
@@ -739,7 +759,7 @@ class DspSerialApi:
             except ValueError:
                 raise CommandError(f"Mode '{mode}' is invalid. "
                                  f"""Should be within ({', '.join(f"'{s}'" for s in modes)})""")
-        if (mode == 2): raise NotImplementedError("Signature control mode is not currently supported")
+        if (mode == 2): raise NotImplementedError("Signature control mode is not supported")
         elif (mode > 2): raise CommandError(f"Mode {mode} is invalid. Should be within [0, 1, 2]")
 
         # check 'signal' argument
@@ -753,7 +773,11 @@ class DspSerialApi:
 
         # pack and send command
         commandParams = struct.pack('< H B', signal.n, mode)
-        commandValue = struct.pack(f'< {self.Signal.structTypeCode[signal.type]}', value)
+        if (signal.type == self.Signal.TypeName.String.value):
+            raise NotImplementedError(f"Cannot assign to string-type signal. "
+                                "(for what on Earth reason do you wanna do that???)")
+        try: commandValue = struct.pack(f'< {self.Signal.structTypeCode[signal.type]}', value)
+        except ParseValueError: raise ValueError(f"Cannot assign '{value}' to '{signal.name}' signal")
         # log.debug(f"Signal number and mode - {signal.n}, {mode}")
         # log.debug(f"Packed - {bytewise(commandParams)}")
         # log.debug(f"Signal value - {value}")
@@ -766,13 +790,13 @@ class DspSerialApi:
         return ACK
 
 
-    @Command(command='01 04', shortcut='ssg', required=False, category=Command.Type.SIG)
+    @Command(command='03 04', shortcut='ssg', required=False, category=Command.Type.SIG)
     def setSignature(self, command, *args):
         """ API: NotImplemented"""
         return NotImplemented
 
 
-    @Command(command='01 05', shortcut='rs', required=False, category=Command.Type.SIG)
+    @Command(command='03 05', shortcut='rs', required=False, category=Command.Type.SIG)
     def readSignal(self, command, signal):
         """ API: readSignal(signal=Signal()/<signal number>) """
 
@@ -784,11 +808,11 @@ class DspSerialApi:
         ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
 
         if (not ACK): return ACK
-        if (not reply): raise DataInvalidError("Empty data")
-
-        #TODO: parse reply
-
-        return ACK
+        if (not reply): return None
+        try: sigVal = struct.unpack(f'< {self.Signal.structTypeCode[signal.type]}', reply)[0]
+        except ParseValueError: raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
+                                   f"[{bytewise(reply)}]")
+        return sigVal
 
 
 

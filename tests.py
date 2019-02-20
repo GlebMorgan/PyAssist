@@ -35,8 +35,15 @@ STARTBYTE = 0x5A         # type: int
 MASTER_ADDRESS = 0          # should be in reply to host machine
 
 
+# COMMAND PACKET STRUCTURE
 # 1           2     3:4           5:6         7:8       9:...         -3    -2:-1
-# StartByte - ADR - Length|EVEN - HeaderRFC - COMMAND - CommandData - LRC - PacketRFC
+# StartByte   ADR   Length|EVEN   HeaderRFC   COMMAND   CommandData   LRC   PacketRFC
+#                                            [       command       ]
+
+# REPLY PACKET STRUCTURE
+# 1           2     3:4           5:6         7          10:...      -3    -2:-1
+# StartByte   ADR   Length|EVEN   HeaderRFC   ACK byte   ReplyData   LRC   PacketRFC
+#                                            [       reply        ]
 
 
 # slog - should be used for general serial communication info only (packets and timeouts)
@@ -74,12 +81,20 @@ class BadDataError(SerialCommunicationError):
     """Data received over serial port is corrupted"""
 
 
-class DeviceError(RuntimeError):
-    """Firmware-level error, indicate the command sent to the device was not properly executed"""
+class BadRfcError(SerialCommunicationError):
+    """RFC chechsum validation failed"""
+
+
+class BadLrcError(SerialCommunicationError):
+    """LRC chechsum validation failed"""
 
 
 class BadAckError(SerialCommunicationError):
     """Devise has sent 'FF' acknowledge byte => error executing command on device side"""
+
+
+class DeviceError(RuntimeError):
+    """Firmware-level error, indicate the command sent to the device was not properly executed"""
 
 
 class DataInvalidError(DeviceError):
@@ -106,6 +121,7 @@ class SerialTransceiver(serial.Serial):
 
     AUTO_LRC = False
     RFC_CHECK_DISABLED = True
+    LRC_CHECK_DISABLED = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -202,7 +218,7 @@ class SerialTransceiver(serial.Serial):
                 log.info(f"Serial input buffer flushed")
             return data[:-2] if (not zerobyte) else data[:-3]  # 2 is packet RFC, 1 is zero padding byte
         else:
-            raise BadDataError(f"Bad packet checksum (expected '{bytewise(rfc1071(data[:-2]))}', "
+            raise BadRfcError(f"Bad packet checksum (expected '{bytewise(rfc1071(data[:-2]))}', "
                                f"got '{bytewise(data[-2:])}'). Packet discarded",
                                dataname="Packet", data=header+data)
 
@@ -279,7 +295,7 @@ def receivePacketBulk(com):
         if (int.from_bytes(rfc1071(header+data), byteorder='big') == 0):
             return data if (not zerobyte) else data[:-1]
         else:
-            raise BadDataError(f"Bad packet checksum "
+            raise BadRfcError(f"Bad packet checksum "
                                f"(expected '{bytewise(rfc1071(data[:-2]))}', got '{bytewise(data[-2:])}'). "
                                f"Packet discarded")
     elif (len(bytesReceived) == 0):
@@ -308,7 +324,7 @@ def receivePacketBulk(com):
                         if (bytesReceived): log.info("Unread data is left in the input buffer")
                         return data if (not zerobyte) else data[:-1]
                     else:
-                        raise BadDataError(f"Bad packet checksum "
+                        raise BadRfcError(f"Bad packet checksum "
                                            f"(expected '{bytewise(rfc1071(data[:-2]))}', got '{bytewise(data[-2:])}'). "
                                            f"Packet discarded")
         else: raise RuntimeError("Cannot find header in datastream...")
@@ -336,6 +352,11 @@ class DspSerialApi:
 
     #TODO: on upper layer: if command returns bad ACK, first check
     # whether all conditions, described in DSP protocol, were met
+
+    #TODO: correct and unify all error-messages:
+    # "Error cause (type/value mismatch, invalid data, whatever): required {proper}, got {actual}"
+
+    #TODO: add to every bytewise() call 'collapseAfter=self.MAX_DATA_LEN_REPR' argument if long data output is possible
 
     # STRUCT CODES:
     # 1 byte (uint8)   -> B
@@ -469,8 +490,11 @@ class DspSerialApi:
     class Command():
         """
         Command decorator
-        Every command method returns execution result
-        It may be a boolean value (in case no data is required from device) or data of appropriate type
+
+        Every command method returns execution result (data or ACK)
+        ACK is a boolean value (returned in case no data is required from device), data is of its own appropriate type
+        Reply data presence is not checked at decorator level
+            (that also means if reply contains extra (unnecessary) data, it will be ignored)
         """
 
         # map [full command method names] to [command methods themselves] ▼
@@ -485,15 +509,17 @@ class DspSerialApi:
 
         def __init__(self, command, shortcut, required=False, category=Type.NONE):
             if (not isinstance(shortcut, str)):
-                raise TypeError(f"'{shortcut.__name__}' must be a str, not {type(shortcut)}")
+                raise TypeError(f"'shortcut' must be a str, not {type(shortcut)}")
             try:
                 if (len(bytes.fromhex(command)) != 2): raise ValueError
             except (ValueError, TypeError):
-                raise ValueError(f"'{command.__name__}' is not a valid 2 bytes hex string representation")
+                raise ValueError(f"'command' should be a valid 2 bytes hex string representation, not {command}")
+            if (not isinstance(category, self.Type)):
+                raise TypeError(f"'category' should be of {self.Type.__class__} type, not {category.__class__}")
 
             self.shortcut = shortcut
             self.command = command
-            self.required = required
+            self.required = bool(required)
             self.type = category
 
 
@@ -522,7 +548,7 @@ class DspSerialApi:
     def __sendCommand(self, data):
         """
         Add LRC byte to command data, send it to the device, receive reply packet,
-            verify lrc and return ACK and reply payload data
+            verify lrc and return reply payload data (or raise 'BadAckError' if bad ACK is received)
 
         :param data: full command data
         :type data: bytes
@@ -532,14 +558,16 @@ class DspSerialApi:
 
         self.tr.sendPacket(data+lrc(data))
         reply = self.tr.receivePacket()
-        if (not reply):
-            raise DataInvalidError("Empty reply")
+
+        if (len(reply) < 2): raise DataInvalidError("Empty reply")
         if (not lrc(reply)):
-            raise BadDataError(f"Bad data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
-                               f"got '{bytewise(reply[-1:])}'). Reply discarded", data=reply)
-        ACK = reply[0] == self.ACK_OK
+            raise BadLrcError(f"Bad data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
+                               f"got '{bytewise(reply[-1:])}'). Reply discarded", dataname="Reply", data=reply)
+        if (reply[0] != self.ACK_OK):
+            raise BadAckError(f"Command execution failed", dataname="Reply", data=reply)
+
         self.__printReply(reply)
-        return ACK, reply[1:-1]
+        return reply[1:-1]
 
 
     def getCommandApi(self, commandMethod):
@@ -598,37 +626,32 @@ class DspSerialApi:
 
         # 'command' may be referenced as 'self.checkChannel.command' instead of passing it here as a
         #  parameter (from decorator), but performance gain of that implementation is probably insignificant (?)
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+        reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
 
-        if (ACK and reply != checkingData):
+        if (reply != checkingData):
             raise DataInvalidError(f"Reply contains bad data (expected [{bytewise(checkingData)}], "
                                    f"got [{bytewise(reply)}])")
-        return ACK
+        return bytewise(reply)
 
 
     @Command(command='01 02', shortcut='r', required=False, category=Command.Type.UTIL)
     def reset(self, command):
         """ API: reset() """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-        return ACK
+        self.__sendCommand(bytes.fromhex(command))
 
 
     @Command(command='01 03', shortcut='i', required=True, category=Command.Type.UTIL)
     def deviceInfo(self, command):
         """ API: deviceInfo() """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(bytes.fromhex(command))
 
-        if (not ACK): return ACK
-        if (not reply): raise DataInvalidError("Empty data")
         #TODO: here ▼ and in selftest():
         # .decode may raise an 'utf-8 decode' error
         # redesign to trim the reply based on zero byte (b'\x00'), not null character ('\0') after data is decoded
-        infoStr = reply.decode('utf-8').split('\0', 1)[0]
+        try: infoStr = reply.decode('utf-8').split('\0', 1)[0]
+        except: raise
         return infoStr
 
 
@@ -636,13 +659,10 @@ class DspSerialApi:
     def scanMode(self, command, enable):
         """API: scanMode('on'/'off') """
 
-        if (enable is True or enable in ('on', 'ON', '+')): command += '01'
-        elif (enable is False or enable in ('off', 'OFF', '-')): command += '00'
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-        return ACK
+        if (enable is True or enable in ('on', 'ON', '+')): mode = '01'
+        elif (enable is False or enable in ('off', 'OFF', '-')): mode = '00'
+        else: raise CommandError(f"Invalid mode: expected ['on'/'off'], got {enable}")
+        reply = self.__sendCommand(bytes.fromhex(command + mode))
 
 
     @Command(command='01 05', shortcut='st', required=False, category=Command.Type.UTIL)
@@ -651,11 +671,12 @@ class DspSerialApi:
 
         initTimeout = self.tr.timeout
         self.tr.timeout = self.SELFTEST_TIMEOUT_SEC
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
 
-        if (not ACK): return ACK
-        if (not reply): raise DataInvalidError("Empty data")
-        selftestResultStr = reply.decode('utf-8').split('\0', 1)[0]
+        reply = self.__sendCommand(bytes.fromhex(command))
+
+        try: selftestResultStr = reply.decode('utf-8').split('\0', 1)[0]
+        except: raise
+
         self.tr.timeout = initTimeout
         return selftestResultStr
 
@@ -664,11 +685,7 @@ class DspSerialApi:
     def saveSettings(self, command):
         """ API: saveSettings() """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-        return ACK
+        self.__sendCommand(bytes.fromhex(command))
 
 
     @Command(command='01 07', shortcut='tch', required=False, category=Command.Type.UTIL)
@@ -686,26 +703,24 @@ class DspSerialApi:
             checkingData = bytes.fromhex(data[:N*2]) if N>0 else b''
 
         checkingData += b'\x00'
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+        reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
 
-        if (not ACK): return ACK
         if (reply != checkingData):
             raise DataInvalidError(f"Reply contains bad data ("
                                    f"expected [{bytewise(checkingData, collapseAfter=self.MAX_DATA_LEN_REPR)}], "
                                    f"got [{bytewise(reply, collapseAfter=self.MAX_DATA_LEN_REPR)}])")
-        return ACK
+        return bytewise(reply, collapseAfter=self.MAX_DATA_LEN_REPR)
 
 
     @Command(command='03 01', shortcut='sc', required=True, category=Command.Type.SIG)
     def signalsCount(self, command):
         """ API: signalsCount() """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(bytes.fromhex(command))
 
-        if (not ACK): return ACK
         if (not reply): raise DataInvalidError("Empty data")
         try: nSignals = struct.unpack('< H', reply)[0]
-        except ParseValueError: raise DataInvalidError("Cannot convert number of signals received to integer value")
+        except ParseValueError: raise DataInvalidError(f"Cannot convert data to integer value: [{reply}]")
         return nSignals
 
 
@@ -713,11 +728,9 @@ class DspSerialApi:
     def readSignalDescriptor(self, command, signalNum):
         """ API: readSignalDescriptor(signalNum=<signalNum number>) """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signalNum))
+        reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signalNum))
 
-        if (not ACK): return ACK
         if (not reply): raise DataInvalidError("Empty data")
-
         try:
             sigNameEndIndex = reply.find(b'\0')
         except ValueError:
@@ -769,7 +782,7 @@ class DspSerialApi:
         # pack and send command
         commandParams = struct.pack('< H B', signal.n, mode)
         if (self.Signal.Type[signal.type] == 'string'):
-            raise NotImplementedError(f"Cannot assign to string-type signal. "
+            raise NotImplementedError(f"Cannot assign to string-type signal "
                                 "(for what on Earth reason do you wanna do that???)")
         try: commandValue = struct.pack(f'< {self.Signal.structTypeCode[signal.type]}', value)
         except ParseValueError: raise ValueError(f"Cannot assign '{value}' to '{signal.name}' signal")
@@ -778,11 +791,7 @@ class DspSerialApi:
         # log.debug(f"Signal value - {value}")
         # log.debug(f"Packed - {bytewise(commandValue)}")
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + commandParams + commandValue)
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-        return ACK
+        reply = self.__sendCommand(bytes.fromhex(command) + commandParams + commandValue)
 
 
     @Command(command='03 04', shortcut='ssg', required=False, category=Command.Type.SIG)
@@ -800,10 +809,10 @@ class DspSerialApi:
         elif (not isinstance(signal, self.Signal)):
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
+        reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
 
-        if (not ACK): return ACK
         if (not reply): return None
+        #TODO: add functionality to read string-type signals! ▼
         try: sigVal = struct.unpack(f'< {self.Signal.structTypeCode[signal.type]}', reply)[0]
         except ParseValueError: raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
                                    f"[{bytewise(reply)}]")
@@ -814,11 +823,9 @@ class DspSerialApi:
     def readTelemetryDescriptor(self, command):
         """ API: readTelemetryDescriptor() """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(bytes.fromhex(command))
 
-        if (not ACK): return ACK
         if (not reply): raise DataInvalidError("Empty data")
-
         try: params = struct.unpack('< I H H I', reply)
         except ParseValueError:
             raise DataInvalidError(f"Failed to parse telemetry descriptor structure: [{bytewise(reply)}]")
@@ -842,7 +849,7 @@ class DspSerialApi:
             if (parName == 'Period'): comment = f" ({1/(params[parNum]/100/1_000_000)} Hz)"
             log.info(f"{parName.rjust(paramNamesMaxWidth)} : {params[parNum]}{comment}")
 
-        #TODO: return self.Telemetry() object istead ▼
+        #TODO: return self.Telemetry() object instead ▼
         return {parName: par for parName, par in zip(paramNames, params)}
 
 
@@ -850,7 +857,7 @@ class DspSerialApi:
     def setTelemetry(self, command, mode, periodCoef=5, dataframeSize=0):
         """ API: TODO"""
 
-        self.Telemetry = namedtuple('telemetryStub', 'Period FrameSize')(10000)  # ◄ stub - TODO: add Telemetry subclass
+        self.Telemetry = namedtuple('telemetryStub', 'Period FrameSize')(10000, 0)  # ◄ stub - TODO: add Telemetry subclass
 
         # check 'mode' argument
         modes = ('reset', 'stream', 'framewise', 'buffered', 'stop') #TODO: add 'start' mode as an alias to 'buffered'
@@ -873,17 +880,12 @@ class DspSerialApi:
 
         commandParams = struct.pack('< B I H', mode, periodCoef, dataframeSize)
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + commandParams)
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-
-        return ACK
+        self.__sendCommand(bytes.fromhex(command) + commandParams)
 
 
     @Command(command='04 03', shortcut='as', required=True, category=Command.Type.TELE)
     def addSignal(self, command, signal):
-        """ API addSignal(signal=Signal()/<signal number>) """
+        """ API: addSignal(signal=Signal()/<signal number>) """
 
         #TODO: this ▼ code block repeats frequently. If won't be removed, extract method
         # detect all-the-rest code repetitions and extract internal methods for them
@@ -892,24 +894,19 @@ class DspSerialApi:
         elif (not isinstance(signal, self.Signal)):
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
-
-        if (not ACK): return ACK
-        if (reply): raise DataInvalidError("Reply should contain no additional data")
-
-        return ACK
+        self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
 
 
     @Command(command='04 04', shortcut='rt', required=True, category=Command.Type.TELE)
     def readTelemetry(self, command):
         """ API: TODO """
 
-        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(bytes.fromhex(command))
+        if (not reply): raise DataInvalidError("Empty data") #TODO: what to do if reply is empty? ...
 
-        if (not ACK): return ACK
-        if (not reply): raise DataInvalidError("Empty data")
+        print(bytewise(reply))
 
-
+        return NotImplemented
 
 
 
@@ -1305,10 +1302,11 @@ if __name__ == '__main__':
             for i in range(10_000):
                 try:
                     userinput = input('--> ')
-                    command = userinput.split(maxsplit=1)[0]
-                    if (command.strip() == ''): continue
+                    if (userinput.strip() == ''): continue
 
-                    elif (command in exitcommands):
+                    command = userinput.strip().split(maxsplit=1)[0]
+
+                    if (command in exitcommands):
                         print("Terminated :)")
                         break
 
@@ -1341,7 +1339,7 @@ if __name__ == '__main__':
                                    f"{bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
 
                     elif (command.startswith('>')):
-                        print(eval(userinput[1:]))
+                        print(exec(userinput[1:].strip()))
 
                     elif (not command in commands): raise CommandError("Wrong command")
 
@@ -1352,6 +1350,10 @@ if __name__ == '__main__':
                             if (f"{commands[command].__name__}()" in e.args[0]):
                                 raise CommandError("Wrong arguments!" + os.linesep + e.args[0])
                             else: raise
+                        except SyntaxError:
+                            raise CommandError("Command syntax is incorrect. "
+                                               "Enter command shortcut followed by parameters separated with spaces. "
+                                               "Remember not to put spaces within single parameter :)")
 
                 except CommandError as e: showError(e)
                 except SerialCommunicationError as e: showError(e)

@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import random
 import string
@@ -44,7 +45,7 @@ slog.addHandler(ColorHandler())
 
 #log - should be used for additional detailed info
 log = logging.getLogger(__name__+":main")
-log.setLevel(logging.WARNING)
+log.setLevel(logging.INFO)
 log.addHandler(ColorHandler())
 log.disabled = False
 
@@ -502,7 +503,8 @@ class DspSerialApi:
             @wraps(fun)
             def fun_wrapper(*args, **kwargs):
                 args = (args[0], self.command) + args[1:]
-                log.info(f"Command: {fun.__name__}")
+                log.info("Command: " +
+                         re.sub(r'((?<=[a-z])[A-Z]|(?<!\A)[A-Z](?=[a-z]))', r' \1', fun.__name__).capitalize())
                 return fun(*args, **kwargs)
 
             fun_wrapper.command = self.command
@@ -810,15 +812,47 @@ class DspSerialApi:
         return sigVal
 
 
+    @Command(command='04 01', shortcut='rtd', required=True, category=Command.Type.TELE)
+    def readTelemetryDescriptor(self, command):
+        """ API: readTelemetryDescriptor() """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+
+        try: params = struct.unpack('< I H H I', reply)
+        except ParseValueError:
+            raise DataInvalidError(f"Failed to parse telemetry descriptor structure: [{bytewise(reply)}]")
+        if (bits.flag(params[3], 0) == 1): raise NotImplementedError("Stream transmission mode is not supported")
+        if (bits.flag(params[3], 1) == 1): raise NotImplementedError("Data framing is not supported")
+
+        paramNames = ('Period', 'N signals', 'Frame size', 'Attrs')
+        paramNamesMaxWidth = max(len(name) for name in paramNames)
+        log.info(f"Telemetry descriptor:")
+        for parNum, parName in enumerate(paramNames):
+            comment = ""
+            if(parName == 'Attrs'):
+                # attrs as flags sequence ▼
+                log.info(f"""{parName.rjust(paramNamesMaxWidth)} : {" ".join(f"{params[parNum]:03b}")}""")
+                # attrs as list (parsed) ▼
+                for nAttr, attrName in enumerate(("Streaming", "Framing", "Buffering")):
+                    log.info(f"{attrName.rjust(paramNamesMaxWidth+9)} = "
+                             f"{bits.flag(params[3], nAttr)}")
+                continue
+            if (parName == 'Period'): comment = f" ({1/(params[parNum]/100/1_000_000)} Hz)"
+            log.info(f"{parName.rjust(paramNamesMaxWidth)} : {params[parNum]}{comment}")
+
+        return {parName: par for parName, par in zip(paramNames, params)}
+
+
     def scanSignals(self, attempts=2, showProgress=False):
         nSignals = self.signalsCount()
         signalDescriptors = []
         failedSignalIndices = []
         if (showProgress):
             progressbarElements = (
-                progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
-                ' ',
-                progressbar.Percentage()
+                progressbar.widgets.Bar(marker='█', left='', right='', fill='░'), ' ', progressbar.Percentage()
             )
             progress = progressbar.ProgressBar(widgets=progressbarElements, fd=sys.stdout)
         else: progress = iter

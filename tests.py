@@ -7,6 +7,7 @@ import string
 import struct
 import time
 import traceback
+from collections import namedtuple
 from enum import Enum
 from functools import wraps
 from math import ceil
@@ -333,6 +334,9 @@ def old_command_decorator(commandStrHex, required=False, type='UNSPECIFIED'):
 
 class DspSerialApi:
 
+    #TODO: on upper layer: if command returns bad ACK, first check
+    # whether all conditions, described in DSP protocol, were met
+
     # STRUCT CODES:
     # 1 byte (uint8)   -> B
     # 2 byte (uint16)  -> H
@@ -354,23 +358,17 @@ class DspSerialApi:
         self.tr = SerialTransceiver()
 
     class Signal():
+        #TODO: redesign all the class using (possibly) named tuples
+        # (or anything that is efficient and readable
 
-        class TypeName(Enum):
-            String = 0
-            Bool   = 1
-            Byte   = 2
-            Uint   = 3
-            Int    = 4
-            Long   = 5
-            Ulong  = 6
-            Float  = 7
-
-        class ClassName(Enum):
-            VAR    = 0
-            ARRAY  = 1
-            MATRIX = 2
+        #TODO: redesign wherever necessary to replace all pre-checks (typically, involving 'if's) to try-except blocks
+        # examples:
+        # ——— check 'signal' parameter (whether it's 'Signal()' or 'int') -> get attribute signal.n and try-exept it
+        # ——— instead of checking ACK and whether the command should return any data, add respective command method attr
+        # leave only those checks when wrong values can cause device-side error or misoperation
 
         # these are Signal() attributes after object initialization ▼
+
         paramNames = ('Name', 'Class', 'Type', 'Attrs', 'Parent', 'Period', 'Dimen', 'Factor')
 
         attrsNames = ('control', 'node', 'signature', 'read', 'setting', 'telemetry')
@@ -715,8 +713,7 @@ class DspSerialApi:
     def readSignalDescriptor(self, command, signalNum):
         """ API: readSignalDescriptor(signalNum=<signalNum number>) """
 
-        sigNumBytes = struct.pack('< H', signalNum)
-        ACK, reply = self.__sendCommand(bytes.fromhex(command) + sigNumBytes)
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signalNum))
 
         if (not ACK): return ACK
         if (not reply): raise DataInvalidError("Empty data")
@@ -750,6 +747,7 @@ class DspSerialApi:
         if method is called with no signal value, it just changes signal mode without changing signal value """
 
         # check 'mode' argument
+        #TODO: move 'modes' definition to self.Signal() ▼
         modes = ('none', 'fix', 'sign')
         if (isinstance(mode, str)):
             try: mode = modes.index(mode)
@@ -757,7 +755,7 @@ class DspSerialApi:
                 raise CommandError(f"Mode '{mode}' is invalid. "
                                  f"""Should be within ({', '.join(f"'{s}'" for s in modes)})""")
         if (mode == 2): raise NotImplementedError("Signature control mode is not supported")
-        elif (mode > 2): raise CommandError(f"Mode {mode} is invalid. Should be within [0, 1, 2]")
+        elif (mode > 2): raise CommandError(f"Mode {mode} is invalid. Should be within [0..{len(modes)-1}]")
 
         # check 'signal' argument
         if (isinstance(signal, int)):
@@ -766,11 +764,11 @@ class DspSerialApi:
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
         #check 'value' argument
-        if (value is None): value = self.readSignal(signal)  #TODO: implement 'readSignal()' and test functionality
+        if (value is None): value = self.readSignal(signal)
 
         # pack and send command
         commandParams = struct.pack('< H B', signal.n, mode)
-        if (signal.type == self.Signal.TypeName.String.value):
+        if (self.Signal.Type[signal.type] == 'string'):
             raise NotImplementedError(f"Cannot assign to string-type signal. "
                                 "(for what on Earth reason do you wanna do that???)")
         try: commandValue = struct.pack(f'< {self.Signal.structTypeCode[signal.type]}', value)
@@ -827,7 +825,8 @@ class DspSerialApi:
         if (bits.flag(params[3], 0) == 1): raise NotImplementedError("Stream transmission mode is not supported")
         if (bits.flag(params[3], 1) == 1): raise NotImplementedError("Data framing is not supported")
 
-        paramNames = ('Period', 'N signals', 'Frame size', 'Attrs')
+        #TODO: move logging to self.Telemetry.showTeleDescriptor() ▼
+        paramNames = ('Period', 'SignalsCount', 'FrameSize', 'Attrs')
         paramNamesMaxWidth = max(len(name) for name in paramNames)
         log.info(f"Telemetry descriptor:")
         for parNum, parName in enumerate(paramNames):
@@ -843,7 +842,82 @@ class DspSerialApi:
             if (parName == 'Period'): comment = f" ({1/(params[parNum]/100/1_000_000)} Hz)"
             log.info(f"{parName.rjust(paramNamesMaxWidth)} : {params[parNum]}{comment}")
 
+        #TODO: return self.Telemetry() object istead ▼
         return {parName: par for parName, par in zip(paramNames, params)}
+
+
+    @Command(command='04 02', shortcut='tm', required=True, category=Command.Type.TELE)
+    def setTelemetry(self, command, mode, periodCoef=5, dataframeSize=0):
+        """ API: TODO"""
+
+        self.Telemetry = namedtuple('telemetryStub', 'Period FrameSize')(10000)  # ◄ stub - TODO: add Telemetry subclass
+
+        # check 'mode' argument
+        modes = ('reset', 'stream', 'framewise', 'buffered', 'stop') #TODO: add 'start' mode as an alias to 'buffered'
+        if (isinstance(mode, int)):
+            if (mode > len(modes)-1):
+                raise CommandError(f"Mode '{mode}' is invalid. Should be within [0..{len(modes)-1}]")
+        else:
+            try: mode = modes.index(mode)
+            except ValueError:
+                raise CommandError(f"Mode '{mode}' is invalid. "
+                                   f"""Should be within ({', '.join(f"'{s}'" for s in modes)})""")
+
+        # check 'periodCoef' argument
+        if (not isinstance(periodCoef, int) or periodCoef < 0 or periodCoef > self.Telemetry.Period):
+            raise CommandError(f"Period coefficient should be reasonable positive integer value, not {periodCoef}")
+
+        # check 'dataframeSize' argument
+        if (not isinstance(dataframeSize, int) or dataframeSize < 0 or dataframeSize > self.Telemetry.FrameSize):
+            raise CommandError(f"Dataframe size should be reasonable positive integer value, not {periodCoef}")
+
+        commandParams = struct.pack('< B I H', mode, periodCoef, dataframeSize)
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + commandParams)
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+
+        return ACK
+
+
+    @Command(command='04 03', shortcut='as', required=True, category=Command.Type.TELE)
+    def addSignal(self, command, signal):
+        """ API addSignal(signal=Signal()/<signal number>) """
+
+        #TODO: this ▼ code block repeats frequently. If won't be removed, extract method
+        # detect all-the-rest code repetitions and extract internal methods for them
+        if (isinstance(signal, int)):
+            signal = self.readSignalDescriptor(signal)
+        elif (not isinstance(signal, self.Signal)):
+            raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
+
+        if (not ACK): return ACK
+        if (reply): raise DataInvalidError("Reply should contain no additional data")
+
+        return ACK
+
+
+    @Command(command='04 04', shortcut='rt', required=True, category=Command.Type.TELE)
+    def readTelemetry(self, command):
+        """ API: TODO """
+
+        ACK, reply = self.__sendCommand(bytes.fromhex(command))
+
+        if (not ACK): return ACK
+        if (not reply): raise DataInvalidError("Empty data")
+
+
+
+
+
+
+
+
+
+
 
 
     def scanSignals(self, attempts=2, showProgress=False):

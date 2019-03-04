@@ -12,7 +12,7 @@ import time
 import traceback
 from collections import namedtuple, OrderedDict
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum, unique
+from enum import Enum, IntEnum, unique, Flag
 from functools import wraps, reduce
 from math import ceil
 from typing import Any, Union, NamedTuple, TypeVar, Optional, ClassVar, Generic, Sequence, NoReturn, Callable
@@ -362,7 +362,7 @@ def old_command_decorator(commandStrHex, required=False, type='UNSPECIFIED'):
         @wraps(fun)
         def func_wrapper(*args, **kwargs):
             #TODO: get COMMANDS dict NOT from pulling it out of self.__class__ (that's ridiculous!)
-            DspSerialApi.COMMANDS[fun.__name__] = commandStrHex
+            DspSerialApi.Command.COMMANDS[fun.__name__] = commandStrHex
             return fun(*args, **kwargs)
         return func_wrapper
     return command_wrapper
@@ -400,7 +400,12 @@ class DspSerialApi:
     nSignals: Union[Signal.Unknown, int] = None
 
     def __init__(self):
-        self.tr = SerialTransceiver()
+        self.setTransceiver()
+
+    def setTransceiver(self):
+        self.transceiver = SerialTransceiver()
+        # ▼ duck tape - TODO: decide how to set the ability for Signal() object to use transceiver defined here
+        self.Signal.transceiver = self.transceiver
 
     # AttrType = TypeVar('AttrType')
     # class Const(Generic[AttrType]):
@@ -419,7 +424,6 @@ class DspSerialApi:
     #         return type.__new__(mcs, name, bases, classDict)
 
 
-    @init_class('init_root')
     @add_slots
     class Signal:
 
@@ -454,28 +458,30 @@ class DspSerialApi:
         varclass: Class
         vartype: Type
         attrs: Attrs
-        parent: DspSerialApi.Signal # actual: Union[DspSerialApi.Signal, Root]
+        parent: Optional[DspSerialApi.Signal]
         period: int
         dimen: Dimen
         factor: float
 
-
-        root: ClassVar[Root] = None
 
         # TODO: consider better way to differentiate dynamic and const parameters, for now using just names sequences
         # If new signal-defined parameters are added, they must be included here to provide mutability
         dynamicParameters: ClassVar[tuple] = \
             ('value', 'mode', 'signature', 'nChildren', 'fullname')
 
-        # Signal properties according to DSP Assist protocol
+        # Signal descriptor properties according to DSP Assist protocol
         descriptorParameters: ClassVar[tuple] = \
             ('name', 'varclass', 'vartype', 'attrs', 'parent', 'period', 'dimen', 'factor')
 
 
-        class Unknown:
+        transceiver: ClassVar[SerialTransceiver]
+
+
+        class Unknown():
             __slots__ = ('value')
             """ Represents unknown signal value / property (e.g. not yet read from device)
                 Any property will return '<Unknown>' string """
+
             #TODO: make class Unknown return self-instance to enable assignments like
             # signal.value = Unknown <with no parenthesis>
 
@@ -486,99 +492,73 @@ class DspSerialApi:
                 if (item == 'name'): return "<Void>"
                 return object.__getattribute__(self, 'value')
 
+            def __round__(self, n=None):
+                return self.value
+
             def __repr__(self):
                 return self.value
 
-
-        class Root:
-            """ Dummy class substituting a absent parent signal"""
-
-            @property
-            def name(self): return '<None>'
-
-            @property
-            def fullname(self): return '<None>'
-
-            @property
-            def parent(self): return None
-
-            @property
-            def n(self): return -1
-
-            def __str__(self):
-                return '<Root>'
 
         class ParamEnum(Enum):
             def __index__(self): return self.value
             def __str__(self): return self.name
 
+
         @unique
         class Mode(ParamEnum):
-            NONE = 0   # Device-driven
+            FREE  = 0  # Device-driven
             FIXED = 1  # Assist-driven
-            SIGN = 2   # Signature-driven
+            SIGN  = 2  # Signature-driven
 
 
         @unique
         class Class(ParamEnum):
-            VAR = 0
-            ARRAY = 1
+            VAR    = 0
+            ARRAY  = 1
             MATRIX = 2
 
 
         @unique
         class Type(ParamEnum):
-            String = 0, NotImplemented  # type 0: char[]
-            Bool =   1, 'B'  # type 1: uint_8  -> 1 byte
-            Byte =   2, 'B'  # type 2: uint_8  -> 1 byte
-            Uint =   3, 'H'  # type 3: uint_16 -> 2 bytes
-            Int =    4, 'h'  # type 4: int_16  -> 2 bytes
-            Long =   5, 'i'  # type 5: int_32  -> 4 bytes
-            Ulong =  6, 'I'  # type 6: uint_32 -> 4 bytes
-            Float =  7, 'f'  # type 7: float   -> 4 bytes
+            String = 0, NotImplemented, str # type 0: char[]
+            Bool =   1, 'B', bool   # type 1: uint_8  -> 1 byte
+            Byte =   2, 'B', int    # type 2: uint_8  -> 1 byte
+            Uint =   3, 'H', int    # type 3: uint_16 -> 2 bytes
+            Int =    4, 'h', int    # type 4: int_16  -> 2 bytes
+            Long =   5, 'i', int    # type 5: int_32  -> 4 bytes
+            Ulong =  6, 'I', int    # type 6: uint_32 -> 4 bytes
+            Float =  7, 'f', float  # type 7: float   -> 4 bytes
 
-            def __new__(cls, idx:int, code:str):
+            def __new__(cls, idx:int, code:str, pyType:type):
                 member = object.__new__(cls)
                 member._value_ = idx
                 return member
 
-            def __init__(self, idx:int, code:str):
-                self._code = code
+            def __init__(self, idx:int, code:str, pytype:type):
+                self._struct_code = code
+                self._py_type = pytype
 
             @property
             def index(self)->int: return self.value
 
             @property
-            def code(self)->str: return self._code
-
-
-        class Attrs(tuple):
-            #TODO: redesign this class using IntFlag enum type
-            __slots__ = ()
-
-            class Attr(Enum):
-                Control = 0
-                Node = 1
-                Signature = 2
-                Read = 3
-                Setting = 4
-                Telemetry = 5
-
-            def __new__(cls, flagsByte: int):
-                return super().__new__(cls, cls.parsed(flagsByte))
-
-            def __index__(self): return self.raw
-
-            def __str__(self): return str(tuple(map(str, (attr.name for attr in self))))
+            def code(self)->str: return self._struct_code
 
             @property
-            def raw(self)->int:
-                if (self): return reduce(lambda x, y: x | y, (bits.set(attr.value) for attr in self))
-                else: return 0
+            def pytype(self)->type: return self._py_type
 
-            @classmethod
-            def parsed(cls, flagsByte: int)->tuple:
-                return tuple(attr for attr in cls.Attr if bits.flag(flagsByte, attr.value))
+
+        class Attrs(ParamEnum, Flag):
+            Control = 1 << 0
+            Node = 1 << 1
+            Signature = 1 << 2
+            Read = 1 << 3
+            Setting = 1 << 4
+            Telemetry = 1 << 5
+
+            def __str__(self):
+                raw = repr(self)
+                return raw[raw.index('.') + 1: raw.rfind(':')] if self.value != 0 else '<None>'
 
 
         @unique
@@ -630,7 +610,6 @@ class DspSerialApi:
                     if(e.args[0] == sigParamErrorId):
                         raise TypeError(f"'{e.args[1]}' has invalid value: '{e.args[2]}'")
                     else: raise
-
             # Create object from descriptor provided by device
             elif (params is not None and not kwargs):
                 if (len(params) != len(self.descriptorParameters)):
@@ -640,7 +619,7 @@ class DspSerialApi:
                 self.vartype = self.Type(params[2])
                 self.attrs = self.Attrs(params[3])
                 # TODO: link to existing signal (taken from some data structure, storing all scanned signals
-                self.parent = self.root if (params[4] == -1) else NotImplemented
+                self.parent = None if (params[4] == -1) else NotImplemented
                 self.period = params[5]
                 self.dimen = self.Dimen(params[6])
                 self.factor = params[7]
@@ -648,8 +627,8 @@ class DspSerialApi:
                 #     #TODO: Container types are not allowed for this approach -
                 #     # think over how one can overcome this limitation :)
                 #     if (name == 'parent'):
-                #         if (par == -1): self.parent = self.root
-                #         else: self.parent = self.root  #TODO ◄ Add getting a parent signal
+                #         if (par == -1): self.parent = None
+                #         else: self.parent = self  # stub
                 #     else:
                 #         # Pass each 'par' to its respective type initializer
                 #         #  and assign obtained attribute object to self:
@@ -658,10 +637,9 @@ class DspSerialApi:
                 #         else: attrObject = eval('self.' + self.__annotations__[name])(par)
                 #         setattr(self, name.lower(), attrObject)
             else: raise TypeError("Wrong signature")
-
             self.n = n
             self.value = self.Unknown()
-            self.mode = self.Mode.NONE
+            self.mode = self.Mode.FREE
             self.signature = NotImplemented
             # 'self.fullname' and 'self.nChildren' should not be assigned! (handled in '__getattr__')
 
@@ -682,7 +660,10 @@ class DspSerialApi:
                 return self.fullname
             if (item == 'nChildren'):
                 self.nChildren = self.getChildrenCount()
-            else: raise AttributeError(f"Invalid attr: {self.__class__.__name__}.{item}")
+                return self.nChildren
+            else:
+                raise AttributeError(f"Invalid {self.__class__.__name__.lower()} attr: "
+                                     f"{self.__class__.__name__}.{item}")
 
 
         def __iter__(self):
@@ -692,17 +673,31 @@ class DspSerialApi:
 
         def __str__(self):
             return f"{self.name} = {round(self.value, 3) if self.vartype == self.Type.Float else self.value} " \
-                   f"{{mode={self.mode}, attrs={self.attrs}, parent={self.parent.name}}}"
-                                                           #TODO: maybe, fullname?
+                   f"{{mode={self.mode}, attrs={self.attrs}, parent={self.parent.fullname if self.parent else '<None>'}}}"
+
 
         def __repr__(self):
             return auto_repr(self, f"#{self.n} {self.fullname}[{self.vartype}] = "
                 f"{str(round(self.factor, 3))+'×' if self.factor != 1 else ''}"
                 f"{round(self.value, 3) if self.vartype == self.Type.Float else self.value}{self.dimen.sign} "
-                f"{{mode={self.mode.name}, attrs={self.attrs}, parent=#{self.parent.n}, children={self.nChildren}}}")
+                f"{{mode={self.mode.name}, attrs={self.attrs}, parent=#{self.parent.n if self.parent else '-1'}, "
+                f"children={self.nChildren}}}")
 
 
-        #TODO: Why nChildren is None at Signal()__repr__???
+        def __call__(self, signalValue=None):
+            if (signalValue is None):
+                # TODO: self.value = readSignal()
+                ...
+                return self.value
+            else:
+                if (type(signalValue) == self.vartype.pytype):
+                    # TODO: setMode(signalValue)
+                    #       self.value = readSignal()
+                    # ▼ temporary stub!
+                    self.value = signalValue
+                else:
+                    raise TypeError(f"Wrong value type for signal '{self.name}'. "
+                                    f"Expected '{self.vartype}', got '{type(signalValue)}'")
 
 
         @classmethod
@@ -717,15 +712,11 @@ class DspSerialApi:
             return max(len(attrName) for attrName in cls.Attrs.Attr.__members__)
 
 
-        @classmethod
-        def init_root(cls): cls.root = cls.Root()
-
-
         def getFullName(self, sig:DspSerialApi.Signal=None, chain="") -> str:
             if (sig is None): sig = self  # ◄ initialise sig at first iteration
             if (sig.parent is None): return sig.name
             else:
-                if(sig.parent == self.root): return sig.name
+                if(sig.parent is None): return sig.name
                 else: return f"{self.getFullName(sig.parent, chain)}.{sig.name}"
 
 
@@ -738,27 +729,6 @@ class DspSerialApi:
             for name in self.descriptorParameters:
                 descriptorStrLines.append(f"{name.rjust(self.paramsWidth())} : {getattr(self, name)}")
             return os.linesep.join(descriptorStrLines)
-
-
-        def old_showSigDescriptor(self):
-            descriptorStrLines = [f"Signal #{self.n} descriptor:"]
-            for name in self.paramNames:
-                par = getattr(self, name.lower())
-                if (name == 'Attrs'):
-                    # attrs as flags sequence ▼
-                    descriptorStrLines.append(f"""{name.rjust(self.paramNamesMaxLen)} : {" ".join(f"{par:06b}")}""")
-                    # attrs as list (parsed) ▼
-                    for nAttr, attrName in enumerate(self.attrsNames):
-                        descriptorStrLines.append(f"{attrName.rjust(self.paramNamesMaxLen + self.attrNamesMaxLen)} = "
-                                 f"{bits.flag(par, nAttr)}")
-                    continue
-                if (hasattr(self, name) and isinstance(getattr(self, name), dict)):
-                    par = getattr(self, name)[par] or '<None>'
-                descriptorStrLines.append(f"{name.rjust(self.paramNamesMaxLen)} : {par}")
-            return os.linesep.join(descriptorStrLines)
-
-
-        #TODO: implement value setting like that: Signal(<value>) and reading like that: <value> = Signal()
 
 
     class Command():
@@ -861,7 +831,6 @@ class DspSerialApi:
             if (char == '('):
                 if (bracketsLevel == 0):
                     openBracketIndex = pos
-
                     apiName = commandDocstring[methodNameStartIndex:openBracketIndex]
                     if (not frozenset(apiName).issubset(frozenset(string.ascii_letters + '_'))):
                         raise ValueError(f"Invalid API singature method name '{apiName}'")
@@ -1004,7 +973,7 @@ class DspSerialApi:
     @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
     def readSignalDescriptor(self, command, signalNum):
         """ API: readSignalDescriptor(signalNum=<signalNum number>) """
-# STOPPED HERE: need to test new DspSerialApi.Signal class 'in real life', being used here in command methods
+
         reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signalNum))
 
         if (not reply): raise DataInvalidError("Empty data")
@@ -1025,7 +994,7 @@ class DspSerialApi:
             raise DataInvalidError(f"Failed to parse descriptor #{signalNum} structure: "
                                    f"[{bytewise(reply[sigNameEndIndex + 1:])}]")
 
-        signal = self.Signal(signalNum, (name,) + params)
+        signal = self.Signal(signalNum, params=(name, *params))
         log.info(signal.showSigDescriptor())
         return signal
 
@@ -1837,17 +1806,17 @@ if __name__ == '__main__':
         assist = DspSerialApi()
 
         with Timer("100 signals"):
-            signals = [assist.Signal.root]
+            signals = [None]
             for i in range(99):
                 s = assist.Signal(
                         n        = i,
                         name     = f"{''.join(random.sample('ertuopasdfghklxcbnm', random.randint(2,8)))}".capitalize(),
-                        varclass = assist.Signal.Class(random.randint(1,2)),
-                        vartype  = assist.Signal.Type(random.randint(1,7)),
-                        attrs    = assist.Signal.Attrs(random.randint(1,15)),
+                        varclass = assist.Signal.Class(random.randint(0,2)),
+                        vartype  = assist.Signal.Type(random.randint(0,7)),
+                        attrs    = assist.Signal.Attrs(random.randint(0,15)),
                         parent   = random.choice(signals),
                         period   = i*random.randint(10,1000)*10,
-                        dimen    = assist.Signal.Dimen(random.randint(1,9)),
+                        dimen    = assist.Signal.Dimen(random.randint(0,9)),
                         factor   = random.random()*10,
                 )
                 signals.append(s)
@@ -1865,13 +1834,12 @@ if __name__ == '__main__':
         )
         signal.value = 679/13
 
-        p("root", assist.Signal.root)
         p('signal', signal)
         print('slots: ', signal.__slots__, os.linesep)
         p('sig.name', signal.name)
         p('sig.fullname', signal.fullname)
         p('sig.parent', signal.parent)
-        p('sig.parent.name', signal.parent.name)
+        # p('sig.parent.name', signal.parent.name)
         p('sig.nChildren', signal.nChildren)
         p('sig.signature', signal.signature)
         print('iter(sig): ', tuple(signal), os.linesep)
@@ -1879,6 +1847,7 @@ if __name__ == '__main__':
 
         print(signals[random.randint(0,100)])
         print(repr(signals[random.randint(0,100)]))
+        print()
 
     functions = [
         lambda: ...,

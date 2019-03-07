@@ -36,8 +36,8 @@ builtin_types = [d for d in dir(builtins) if isinstance(getattr(builtins, d), ty
 
 
 #TODO: application params (just globals for now)
-COM = 'COM6'
-ADR = 12
+COM = 'COM2'
+DEVICE_ADDRESS = 103
 TIMEOUT = 0.5
 HEADER_LEN = 6              # in bytes
 STARTBYTE = 0x5A         # type: int
@@ -146,6 +146,7 @@ class SerialTransceiver(serial.Serial):
         super().__init__(*args, **kwargs)
         self.port = COM
         self.baudrate = 921600
+        self.parity = serial.PARITY_EVEN
         self.write_timeout = TIMEOUT
         self.timeout = TIMEOUT
 
@@ -272,11 +273,11 @@ class SerialTransceiver(serial.Serial):
 
         datalen = len(msg)  # get data size in bytes
         assert (datalen <= 0xFFF)
-        assert (ADR <= 0xFF)
+        assert (DEVICE_ADDRESS <= 0xFF)
         zerobyte = b'\x00' if (datalen % 2) else b''
         datalen += len(zerobyte)
         # below: data_size = datalen//2 ► translate data size in 16-bit words
-        header = struct.pack('< B B H', STARTBYTE, ADR, (datalen//2) | (len(zerobyte) << 15))
+        header = struct.pack('< B B H', STARTBYTE, DEVICE_ADDRESS, (datalen // 2) | (len(zerobyte) << 15))
         packet = header + rfc1071(header) + msg + zerobyte
         packetToSend = packet + rfc1071(packet)
         bytesSentCount = self.write(packetToSend)
@@ -395,7 +396,9 @@ class DspSerialApi:
     ACK_BAD = 0xFF
     SELFTEST_TIMEOUT_SEC = 5
     TESTCHANNEL_DEFAULT_DATALEN = 1023
+    TESTCHANNEL_MAX_DATALEN = 1023
     TESTCHANNEL_DEFAULT_DATABYTE = 'AA'
+    BASE_SIGNAL_DESCRIPTOR_SIZE = 17
     MAX_DATA_LEN_REPR = 25
     nSignals: Union[Signal.Unknown, int] = None
 
@@ -406,22 +409,6 @@ class DspSerialApi:
         self.transceiver = SerialTransceiver()
         # ▼ duck tape - TODO: decide how to set the ability for Signal() object to use transceiver defined here
         self.Signal.transceiver = self.transceiver
-
-    # AttrType = TypeVar('AttrType')
-    # class Const(Generic[AttrType]):
-    #     def __init__(self, type_annotation):
-    #         self.type_annotation = type_annotation
-
-
-    # class OrderedClassMembers(type):
-    #     @classmethod
-    #     def __prepare__(mcs, name, bases):
-    #         return OrderedDict()
-    #
-    #     def __new__(mcs, name, bases, classDict):
-    #         classDict['__ordered__'] = [key for key in classDict.keys()
-    #                                     if key not in ('__module__', '__qualname__')]
-    #         return type.__new__(mcs, name, bases, classDict)
 
 
     @add_slots
@@ -480,7 +467,7 @@ class DspSerialApi:
         class Unknown():
             __slots__ = ('value')
             """ Represents unknown signal value / property (e.g. not yet read from device)
-                Any property will return '<Unknown>' string """
+                Any property will return 'self' (Unknown() object), str() will return '<Unknown>' """
 
             #TODO: make class Unknown return self-instance to enable assignments like
             # signal.value = Unknown <with no parenthesis>
@@ -490,7 +477,7 @@ class DspSerialApi:
 
             def __getattr__(self, item):
                 if (item == 'name'): return "<Void>"
-                return object.__getattribute__(self, 'value')
+                return self
 
             def __round__(self, n=None):
                 return self.value
@@ -520,7 +507,7 @@ class DspSerialApi:
 
         @unique
         class Type(ParamEnum):
-            String = 0, NotImplemented, str # type 0: char[]
+            String = 0, '' , str    # type 0: char[]  -> ???
             Bool =   1, 'B', bool   # type 1: uint_8  -> 1 byte
             Byte =   2, 'B', int    # type 2: uint_8  -> 1 byte
             Uint =   3, 'H', int    # type 3: uint_16 -> 2 bytes
@@ -614,15 +601,18 @@ class DspSerialApi:
             elif (params is not None and not kwargs):
                 if (len(params) != len(self.descriptorParameters)):
                     raise TypeError("Wrong number of parameters (or 'descriptorParameters' list is somewhat wrong)")
-                self.name = params[0]
-                self.varclass = self.Class(params[1])
-                self.vartype = self.Type(params[2])
-                self.attrs = self.Attrs(params[3])
-                # TODO: link to existing signal (taken from some data structure, storing all scanned signals
-                self.parent = None if (params[4] == -1) else NotImplemented
-                self.period = params[5]
-                self.dimen = self.Dimen(params[6])
-                self.factor = params[7]
+                try:
+                    self.name = params[0] or '<NoName>'
+                    self.varclass = self.Class(params[1])
+                    self.vartype = self.Type(params[2])
+                    self.attrs = self.Attrs(params[3])
+                    # TODO: link to existing signal (taken from some data structure, storing all scanned signals
+                    self.parent = None if (params[4] == -1) else self.Unknown()
+                    self.period = params[5]
+                    self.dimen = self.Dimen(params[6])
+                    self.factor = params[7]
+                except ValueError as e:
+                    raise DataInvalidError(f"Signal #{n} descriptor is invalid - {e.args[0]}")
                 # for name, par in zip(self.descriptorParameters, params):
                 #     #TODO: Container types are not allowed for this approach -
                 #     # think over how one can overcome this limitation :)
@@ -673,15 +663,15 @@ class DspSerialApi:
 
         def __str__(self):
             return f"{self.name} = {round(self.value, 3) if self.vartype == self.Type.Float else self.value} " \
-                   f"{{mode={self.mode}, attrs={self.attrs}, parent={self.parent.fullname if self.parent else '<None>'}}}"
+                f"{{mode={self.mode}, attrs={self.attrs}, parent={self.parent.fullname if self.parent else '<Root>'}}}"
 
 
         def __repr__(self):
             return auto_repr(self, f"#{self.n} {self.fullname}[{self.vartype}] = "
-                f"{str(round(self.factor, 3))+'×' if self.factor != 1 else ''}"
-                f"{round(self.value, 3) if self.vartype == self.Type.Float else self.value}{self.dimen.sign} "
-                f"{{mode={self.mode.name}, attrs={self.attrs}, parent=#{self.parent.n if self.parent else '-1'}, "
-                f"children={self.nChildren}}}")
+            f"{str(round(self.factor, 3))+'×' if self.factor != 1 else ''}"
+            f"{round(self.value, 3) if self.vartype == self.Type.Float else self.value}{self.dimen.sign} "
+            f"{{mode={self.mode.name}, attrs={self.attrs}, parent=#{self.parent.n if self.parent else '-1'}, "
+            f"children={self.nChildren}}}")
 
 
         def __call__(self, signalValue=None):
@@ -740,7 +730,7 @@ class DspSerialApi:
         Reply data presence is not checked at decorator level
             (that also means if reply contains extra (unnecessary) data, it will be ignored)
         """
-        __slots__ = ('shortcut', 'command', 'required', 'type')
+        __slots__ = ('shortcut', 'command', 'required', 'replyDataLen', 'type')
 
         # map [full command method names] to [command methods themselves] ▼
         COMMANDS = {}
@@ -753,7 +743,7 @@ class DspSerialApi:
             TELE = 4
 
 
-        def __init__(self, command, shortcut, required=False, category=Type.NONE):
+        def __init__(self, command, shortcut, required=False, replyDataLen=None, category=Type.NONE):
             if (not isinstance(shortcut, str)):
                 raise TypeError(f"'shortcut' must be a str, not {type(shortcut)}")
             try:
@@ -766,13 +756,14 @@ class DspSerialApi:
             self.shortcut = shortcut
             self.command = command
             self.required = bool(required)
+            self.replyDataLen = replyDataLen
             self.type = category
 
 
         def __call__(self, fun):
             @wraps(fun)
             def fun_wrapper(*args, **kwargs):
-                args = (args[0], self.command) + args[1:]
+                args = (args[0], self.command, self.replyDataLen) + args[1:]
                 # convert 'CamelCase' to 'Capitalized words sequence'
                 log.info("Command: " +
                          re.sub(r'((?<=[a-z])[A-Z]|(?<!\A)[A-Z](?=[a-z]))', r' \1', fun.__name__).capitalize())
@@ -792,26 +783,28 @@ class DspSerialApi:
         else: slog.debug(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
 
 
-    def __sendCommand(self, data:bytes)->bytes:
+    def __sendCommand(self, command, expectedReplyDataLen, data:bytes=b'')->bytes:
         """
         Add LRC byte to command data, send it to the device, receive reply packet,
             verify lrc and return reply payload data (or raise 'BadAckError' if bad ACK is received)
-
-        :param data: full command data
-        :type data: bytes
-        :return: 2-element tuple: ACK (boolean) and reply data (bytes), if any
-        :rtype: tuple
         """
 
-        self.tr.sendPacket(data+lrc(data))
-        reply = self.tr.receivePacket()
+        self.transceiver.sendPacket(bytes.fromhex(command) + data + lrc(data) or b'')
+        reply = self.transceiver.receivePacket()
 
         if (len(reply) < 2): raise DataInvalidError("Empty reply")
         if (not lrc(reply)):
             raise BadLrcError(f"Bad data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
-                               f"got '{bytewise(reply[-1:])}'). Reply discarded", dataname="Reply", data=reply)
+                              f"got '{bytewise(reply[-1:])}'). Reply discarded", dataname="Reply", data=reply)
         if (reply[0] != self.ACK_OK):
             raise BadAckError(f"Command execution failed", dataname="Reply", data=reply)
+
+        if (expectedReplyDataLen is not None):
+            expectedReplyDataLen += 2  # adding size of ACK byte and LRC byte
+            if (len(reply) != expectedReplyDataLen):
+                if (isinstance(expectedReplyDataLen, tuple)):
+                    expectedReplyDataLen = f"in range [{min(expectedReplyDataLen)}..{max(expectedReplyDataLen)}]"
+                log.warning(f"Unexpected reply data size: expected {expectedReplyDataLen}, got {len(reply)}")
 
         self.__printReply(reply)
         return reply[1:-1]
@@ -824,7 +817,7 @@ class DspSerialApi:
         try:
             methodNameStartIndex = commandDocstring.index('API: ') + 5
         except ValueError:
-            raise ValueError(f"Cannot find API siganture in {commandMethod.__name__} method docstring")
+            raise ValueError(f"Cannot find API signature in {commandMethod.__name__} method docstring")
         methodName = commandMethod.__name__
         bracketsLevel = 0
         for pos, char in enumerate(commandDocstring[methodNameStartIndex:], start=methodNameStartIndex):
@@ -833,7 +826,7 @@ class DspSerialApi:
                     openBracketIndex = pos
                     apiName = commandDocstring[methodNameStartIndex:openBracketIndex]
                     if (not frozenset(apiName).issubset(frozenset(string.ascii_letters + '_'))):
-                        raise ValueError(f"Invalid API singature method name '{apiName}'")
+                        raise ValueError(f"Invalid API singnature method name '{apiName}'")
                     if (apiName != methodName):
                         raise ValueError(f"API signature method name '{apiName}' "
                                          f"does not match actual command method name '{methodName}'")
@@ -860,86 +853,95 @@ class DspSerialApi:
     """
 
 
-    @Command(command='01 01', shortcut='chch', required=True, category=Command.Type.UTIL)
-    def checkChannel(self, command, data=None):
+    @Command(command='01 01', shortcut='chch', required=True, replyDataLen=8, category=Command.Type.UTIL)
+    def checkChannel(self, command, replyDataLen, data=None):
         """ API: checkChannel([data='XX XX ... XX'/'random']) """
 
         if (data == 'random'): checkingData = struct.pack('< 8B', *(random.randrange(0, 0x100) for _ in range(8)))
         elif (data is None): checkingData = bytes.fromhex('01 23 45 67 89 AB CD EF')
         else:
-            if (len(data) != 8): raise CommandError("Data length should be 8 bytes")
-            checkingData = bytes.fromhex(data)
+            try: checkingData = bytes.fromhex(data)
+            except ValueError: raise CommandError(f"Invalid hex data string: [{data.upper()}]")
+            if (len(checkingData) != 8): raise CommandError("Data length should be 8 bytes")
+
 
         # 'command' may be referenced as 'self.checkChannel.command' instead of passing it here as a
         #  parameter (from decorator), but performance gain of that implementation is probably insignificant (?)
-        reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+        reply = self.__sendCommand(command, replyDataLen, checkingData)
 
         if (reply != checkingData):
-            raise DataInvalidError(f"Reply contains bad data (expected [{bytewise(checkingData)}], "
+            raise DataInvalidError(f"Reply contains wrong data (expected [{bytewise(checkingData)}], "
                                    f"got [{bytewise(reply)}])")
         return bytewise(reply)
 
 
-    @Command(command='01 02', shortcut='r', required=False, category=Command.Type.UTIL)
-    def reset(self, command):
+    @Command(command='01 02', shortcut='r', required=False, replyDataLen=0, category=Command.Type.UTIL)
+    def reset(self, command, replyDataLen):
         """ API: reset() """
 
-        self.__sendCommand(bytes.fromhex(command))
+        self.__sendCommand(command, replyDataLen)
 
 
     @Command(command='01 03', shortcut='i', required=True, category=Command.Type.UTIL)
-    def deviceInfo(self, command):
+    def deviceInfo(self, command, replyDataLen):
         """ API: deviceInfo() """
 
-        reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(command, replyDataLen)
 
         #TODO: here ▼ and in selftest():
         # .decode may raise an 'utf-8 decode' error
         # redesign to trim the reply based on zero byte (b'\x00'), not null character ('\0') after data is decoded
         try: infoStr = reply.decode('utf-8').split('\0', 1)[0]
         except: raise
+        if (len(reply) > len(infoStr)+1):
+            log.warning(f"Unexpected reply data size: expected {len(infoStr)+1}, got {len(reply)}")
+
         return infoStr
 
 
-    @Command(command='01 04', shortcut='sm', required=True, category=Command.Type.UTIL)
-    def scanMode(self, command, enable):
+    @Command(command='01 04', shortcut='sm', required=True, replyDataLen=0, category=Command.Type.UTIL)
+    def scanMode(self, command, replyDataLen, enable):
         """API: scanMode('on'/'off') """
 
-        if (enable is True or enable in ('on', 'ON', '+')): mode = '01'
-        elif (enable is False or enable in ('off', 'OFF', '-')): mode = '00'
+        if (enable is True or enable in ('on', 'ON', '+')): mode = b'/x01'
+        elif (enable is False or enable in ('off', 'OFF', '-')): mode = b'/x00'
         else: raise CommandError(f"Invalid mode: expected ['on'/'off'], got {enable}")
-        reply = self.__sendCommand(bytes.fromhex(command + mode))
+        self.__sendCommand(command, replyDataLen, mode)
 
 
     @Command(command='01 05', shortcut='st', required=False, category=Command.Type.UTIL)
-    def selftest(self, command):
+    def selftest(self, command, replyDataLen):
         """ API: selftest() """
 
-        initTimeout = self.tr.timeout
-        self.tr.timeout = self.SELFTEST_TIMEOUT_SEC
+        initTimeout = self.transceiver.timeout
+        self.transceiver.timeout = self.SELFTEST_TIMEOUT_SEC
 
-        reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(command, replyDataLen)
 
         try: selftestResultStr = reply.decode('utf-8').split('\0', 1)[0]
         except: raise
+        if (len(reply) > len(selftestResultStr)+1):
+            log.warning(f"Unexpected reply data size: expected {len(selftestResultStr)+1}, got {len(reply)}")
 
-        self.tr.timeout = initTimeout
+        self.transceiver.timeout = initTimeout
         return selftestResultStr
 
 
-    @Command(command='01 06', shortcut='ss', required=False, category=Command.Type.UTIL)
-    def saveSettings(self, command):
+    @Command(command='01 06', shortcut='ss', required=False, replyDataLen=0, category=Command.Type.UTIL)
+    def saveSettings(self, command, replyDataLen):
         """ API: saveSettings() """
 
-        self.__sendCommand(bytes.fromhex(command))
+        self.__sendCommand(command, replyDataLen)
 
 
     @Command(command='01 07', shortcut='tch', required=False, category=Command.Type.UTIL)
-    def testChannel(self, command, data=None, N=None):
+    def testChannel(self, command, replyDataLen, data=None, N=None):
         """API: testChannel([data='XX XX ... XX'/'random', N=<data size in bytes>) """
 
         if (N is None): N = self.TESTCHANNEL_DEFAULT_DATALEN
-        elif (N > 1023): raise CommandError("Data length ('N') should be no more than 1023")
+        elif (N > self.TESTCHANNEL_MAX_DATALEN):
+            raise CommandError(f"Data length ('N') should be no more than {self.TESTCHANNEL_MAX_DATALEN}")
+
         if (data == 'random'):
             checkingData = struct.pack(f'< {N}B', *(random.randrange(0, 0x100) for _ in range(N)))
         elif (data is None):
@@ -949,7 +951,9 @@ class DspSerialApi:
             checkingData = bytes.fromhex(data[:N*2]) if N>0 else b''
 
         checkingData += b'\x00'
-        reply = self.__sendCommand(bytes.fromhex(command) + checkingData)
+        replyDataLen = len(checkingData)
+
+        reply = self.__sendCommand(command, replyDataLen, checkingData)
 
         if (reply != checkingData):
             raise DataInvalidError(f"Reply contains bad data ("
@@ -958,11 +962,11 @@ class DspSerialApi:
         return bytewise(reply, collapseAfter=self.MAX_DATA_LEN_REPR)
 
 
-    @Command(command='03 01', shortcut='sc', required=True, category=Command.Type.SIG)
-    def signalsCount(self, command):
+    @Command(command='03 01', shortcut='sc', required=True, replyDataLen=2, category=Command.Type.SIG)
+    def signalsCount(self, command, replyDataLen):
         """ API: signalsCount() """
 
-        reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(command, replyDataLen)
 
         if (not reply): raise DataInvalidError("Empty data")
         try: nSignals = struct.unpack('< H', reply)[0]
@@ -970,11 +974,11 @@ class DspSerialApi:
         return nSignals
 
 
-    @Command(command='03 02', shortcut='rsd', required=True, category=Command.Type.SIG)
-    def readSignalDescriptor(self, command, signalNum):
+    @Command(command='03 02', shortcut='rsd', required=True, replyDataLen=17, category=Command.Type.SIG)
+    def readSignalDescriptor(self, command, replyDataLen, signalNum):
         """ API: readSignalDescriptor(signalNum=<signalNum number>) """
 
-        reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signalNum))
+        reply = self.__sendCommand(command, replyDataLen, struct.pack('< H', signalNum))
 
         if (not reply): raise DataInvalidError("Empty data")
         try:
@@ -987,39 +991,39 @@ class DspSerialApi:
             raise DataInvalidError(f"Cannot parse descriptor #{signalNum} field #1 - "
                                    f"failed to convert data to utf-8 string")
         try:
-            params = struct.unpack('< B B I h I B f', reply[sigNameEndIndex + 1:])
+            params = struct.unpack('< B B I h I B f', reply[sigNameEndIndex + 1:][:self.BASE_SIGNAL_DESCRIPTOR_SIZE])
         except ParseValueError:
-            if (reply[sigNameEndIndex + 1] > 0):
-                raise NotImplementedError("Complex type class signals are not supported")
             raise DataInvalidError(f"Failed to parse descriptor #{signalNum} structure: "
                                    f"[{bytewise(reply[sigNameEndIndex + 1:])}]")
 
         signal = self.Signal(signalNum, params=(name, *params))
+        if (signal.varclass is not self.Signal.Class.VAR):
+            raise NotImplementedError("Complex type class signals are not supported")
         log.info(signal.showSigDescriptor())
         return signal
 
 
-    @Command(command='03 03', shortcut='ms', required=False, category=Command.Type.SIG)
-    def manageSignal(self, command, signal, mode, value=None):
-        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<none|fix|sign>, [value=<signal value>]')
-        if method is called with no signal value, it just changes signal mode without changing signal value """
+    @Command(command='03 03', shortcut='ms', required=False, replyDataLen=0, category=Command.Type.SIG)
+    def manageSignal(self, command, replyDataLen, signal, mode, value=None):
+        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<free|fixed|sign>, [value=<signal value>]')
+                 if method is called with no signal value, it just changes signal mode without changing signal value
+                 'mode' argument is case-insensitive """
 
         # check 'mode' argument
-        #TODO: move 'modes' definition to self.Signal() ▼
-        modes = tuple(member.name.lower() for member in self.Signal.Mode)
+        modes = tuple(mode.name.lower() for mode in self.Signal.Mode)
         if (isinstance(mode, str)):
-            try: mode = modes.index(mode)
+            try: mode = modes.index(mode.lower())  # convert to mode index
             except ValueError:
                 raise CommandError(f"Mode '{mode}' is invalid. "
-                                   f"""Should be within ({', '.join(f"'{s}'" for s in modes)})""")
+                                   f"""Should be within [{', '.join(f"'{s}'" for s in modes)}]""")
+        if (mode >= len(modes)): raise CommandError(f"Mode {mode} is invalid. Should be within [0..{len(modes)-1}]")
         if (mode == self.Signal.Mode.SIGN): raise NotImplementedError("Signature control mode is not supported")
-        elif (mode >= len(modes)): raise CommandError(f"Mode {mode} is invalid. Should be within [0..{len(modes)-1}]")
 
         # check 'signal' argument
         if (isinstance(signal, int)):
             signal = self.readSignalDescriptor(signal)
         elif (not isinstance(signal, self.Signal)):
-            raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
+            raise CommandError(f"'signal' argument type is invalid. Expected 'Signal()' or 'int', got '{type(signal)}'")
         if (signal.vartype == self.Signal.Type.String):
             raise NotImplementedError(f"Cannot assign to string-type signal "
                                       "(for what on Earth reason do you wanna do that???)")
@@ -1031,49 +1035,49 @@ class DspSerialApi:
         commandParams = struct.pack('< H B', signal.n, mode)
         try: commandValue = struct.pack(f'< {signal.vartype.code}', value)
         except ParseValueError: raise ValueError(f"Failed to assign '{value}' to '{signal.name}' signal")
-        # log.debug(f"Signal number and mode - {signal.n}, {mode}")
-        # log.debug(f"Packed - {bytewise(commandParams)}")
-        # log.debug(f"Signal value - {value}")
-        # log.debug(f"Packed - {bytewise(commandValue)}")
 
-        self.__sendCommand(bytes.fromhex(command) + commandParams + commandValue)
+        self.__sendCommand(command, replyDataLen, commandParams + commandValue)
 
         signal.mode = self.Signal.Mode(mode)
-        self.readSignal(signal)  # ◄ update signal value
+        self.readSignal(signal)  # ◄ sync signal value
 
 
-    @Command(command='03 04', shortcut='ssg', required=False, category=Command.Type.SIG)
-    def setSignature(self, command, *args):
+    @Command(command='03 04', shortcut='ssg', required=False, replyDataLen=0, category=Command.Type.SIG)
+    def setSignature(self, command, replyDataLen, *args):
         """ API: NotImplemented"""
         return NotImplemented
 
 
     @Command(command='03 05', shortcut='rs', required=False, category=Command.Type.SIG)
-    def readSignal(self, command, signal):
+    def readSignal(self, command, replyDataLen, signal):
         """ API: readSignal(signal=Signal()/<signal number>) """
 
         if (isinstance(signal, int)):
             signal = self.readSignalDescriptor(signal)
         elif (not isinstance(signal, self.Signal)):
-            raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
+            raise CommandError(f"'signal' argument type is invalid. Expected 'Signal()' or 'int', got '{type(signal)}'")
+        replyDataLen = struct.calcsize(signal.vartype.code)
 
-        reply = self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
+        reply = self.__sendCommand(command, replyDataLen, struct.pack('< H', signal.n))
 
-        if (not reply):
-            signal.value = None
+        if (not reply): signal.value = None
 
         #TODO: add functionality to read string-type signals! ▼
         try: sigVal = struct.unpack(f'< {signal.vartype.code}', reply)[0]
-        except ParseValueError: raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
-                                   f"[{bytewise(reply)}]")
+        except ParseValueError:
+            raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: [{bytewise(reply)}]")
         signal.value = sigVal
+        return sigVal
 
 
-    @Command(command='04 01', shortcut='rtd', required=True, category=Command.Type.TELE)
-    def readTelemetryDescriptor(self, command):
+#TODO: redesign all below commands with Telemetry object
+
+
+    @Command(command='04 01', shortcut='rtd', required=True, replyDataLen=NotImplemented, category=Command.Type.TELE)
+    def readTelemetryDescriptor(self, command, replyDataLen):
         """ API: readTelemetryDescriptor() """
 
-        reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(command, replyDataLen)
 
         if (not reply): raise DataInvalidError("Empty data")
         try: params = struct.unpack('< I H H I', reply)
@@ -1103,8 +1107,8 @@ class DspSerialApi:
         return {parName: par for parName, par in zip(paramNames, params)}
 
 
-    @Command(command='04 02', shortcut='tm', required=True, category=Command.Type.TELE)
-    def setTelemetry(self, command, mode, periodCoef=5, dataframeSize=0):
+    @Command(command='04 02', shortcut='tm', required=True, replyDataLen=NotImplemented, category=Command.Type.TELE)
+    def setTelemetry(self, command, replyDataLen, mode, periodCoef=5, dataframeSize=0):
         """ API: TODO"""
 
         self.Telemetry = namedtuple('telemetryStub', 'Period FrameSize')(10000, 0)  # ◄ stub - TODO: add Telemetry subclass
@@ -1130,11 +1134,11 @@ class DspSerialApi:
 
         commandParams = struct.pack('< B I H', mode, periodCoef, dataframeSize)
 
-        self.__sendCommand(bytes.fromhex(command) + commandParams)
+        self.__sendCommand(command, replyDataLen, commandParams)
 
 
-    @Command(command='04 03', shortcut='as', required=True, category=Command.Type.TELE)
-    def addSignal(self, command, signal):
+    @Command(command='04 03', shortcut='as', required=True, replyDataLen=NotImplemented, category=Command.Type.TELE)
+    def addSignal(self, command, replyDataLen, signal):
         """ API: addSignal(signal=Signal()/<signal number>) """
 
         #TODO: this ▼ code block repeats frequently. If won't be removed, extract method
@@ -1144,14 +1148,14 @@ class DspSerialApi:
         elif (not isinstance(signal, self.Signal)):
             raise CommandError("'signal' argument type is invalid. Should be either 'Signal()' or 'int'")
 
-        self.__sendCommand(bytes.fromhex(command) + struct.pack('< H', signal.n))
+        self.__sendCommand(command, replyDataLen, struct.pack('< H', signal.n))
 
 
-    @Command(command='04 04', shortcut='rt', required=True, category=Command.Type.TELE)
-    def readTelemetry(self, command):
+    @Command(command='04 04', shortcut='rt', required=True, replyDataLen=NotImplemented, category=Command.Type.TELE)
+    def readTelemetry(self, command, replyDataLen):
         """ API: TODO """
 
-        reply = self.__sendCommand(bytes.fromhex(command))
+        reply = self.__sendCommand(command, replyDataLen)
         if (not reply): raise DataInvalidError("Empty data") #TODO: what to do if reply is empty? ...
 
         print(bytewise(reply))
@@ -1166,11 +1170,12 @@ class DspSerialApi:
 
 
 
-
-    def scanSignals(self, attempts=2, showProgress=False):
+    #TODO: add new scanSignals() method that would create signals tree structure
+    def simpleScanSignals(self, attempts=2, showProgress=False):
         nSignals = self.signalsCount()
         signalDescriptors = []
         failedSignalIndices = []
+        #TODO: create dedicated function that would add progress bar if requested (introduce global variable)
         if (showProgress):
             progressbarElements = (
                 progressbar.widgets.Bar(marker='█', left='', right='', fill='░'), ' ', progressbar.Percentage()
@@ -1731,7 +1736,17 @@ if __name__ == '__main__':
         if (any(value in commands for value in exitcommands + reservedcommands)):
             raise AssertionError("One ore more API commands duplicate reserved command")
 
-        with assist.tr as com:
+        loggingLvls = {
+            'c': 'CRITICAL',
+            'f': 'FATAL',
+            'e': 'ERROR',
+            'w': 'WARNING',
+            'i': 'INFO',
+            'd': 'DEBUG',
+            'n': 'NOTSET',
+        }
+
+        with assist.transceiver as com:
             for i in range(10_000):
                 try:
                     userinput = input('--> ')
@@ -1753,9 +1768,15 @@ if __name__ == '__main__':
                         reply = com.read(com.in_waiting)
                         print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
 
+                    elif (command == 'log' and userinput[4] in loggingLvls and len(userinput) == 5):
+                        log.setLevel(loggingLvls[userinput[4]])
+
+                    elif (command == 'slog' and userinput[5] in loggingLvls and len(userinput) == 6):
+                        slog.setLevel(loggingLvls[userinput[5]])
+
                     elif (command == 'scans'):
                         with Timer("scan signals"):
-                            signals, failedSignals = assist.scanSignals()
+                            signals, failedSignals = assist.simpleScanSignals()
                         if (failedSignals):
                             log.warning(f"{len(failedSignals)} signals failed to scan: "
                                         f"{tuple(sigNum for sigNum in failedSignals)}")
@@ -1777,6 +1798,7 @@ if __name__ == '__main__':
 
                     else:
                         try:
+                            #TODO: add support to auto-convert names passed as parameters to str/int/etc. if they should
                             print(commands[command](assist, *(eval(arg) for arg in userinput.split()[1:])))
                         except TypeError as e:
                             if (f"{commands[command].__name__}()" in e.args[0]):
@@ -1858,8 +1880,8 @@ if __name__ == '__main__':
         withslots_test,
         Tests_InjectSlots,
         tests,
-        apiTest,
         signal_test,
+        apiTest,
     ]
 
     functions[-1]()

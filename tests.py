@@ -372,6 +372,25 @@ def old_command_decorator(commandStrHex, required=False, type='UNSPECIFIED'):
 #———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 
+class ParamEnum(Enum):
+    @property
+    def index(self) -> int: return self.value
+    def __index__(self): return self.value
+    def __str__(self): return self.name
+
+
+class ParamFlagEnum(ParamEnum, Flag):
+    def __str__(self):
+        raw = repr(self)
+        return raw[raw.index('.') + 1: raw.rfind(':')] if self.value != 0 else '<None>'
+
+    @property
+    def index(self) -> int:
+        # TODO: return tuple of corresponding flags indexes
+        # i.e. Attrs(Telemetry|Read|Control) should return (0, 3, 5)
+        return NotImplemented
+
+
 class DspSerialApi:
 
     #TODO: on upper layer: if command returns bad ACK, first check
@@ -402,15 +421,19 @@ class DspSerialApi:
     MAX_DATA_LEN_REPR = 25
     nSignals: Union[Signal.Unknown, int] = None
 
+
     def __init__(self):
-        self.setTransceiver()
+        self.transceiver = self.setTransceiver()
+
 
     def setTransceiver(self):
-        self.transceiver = SerialTransceiver()
+        this = SerialTransceiver()
         # ▼ duck tape - TODO: decide how to set the ability for Signal() object to use transceiver defined here
-        self.Signal.transceiver = self.transceiver
+        self.Signal.transceiver = this
+        return this
 
 
+    @init_class('initClass')
     @add_slots
     class Signal:
 
@@ -452,7 +475,7 @@ class DspSerialApi:
 
 
         # TODO: consider better way to differentiate dynamic and const parameters, for now using just names sequences
-        # If new signal-defined parameters are added, they must be included here to provide mutability
+        # If new signal-state-defined parameters are added, they must be included here to provide mutability
         dynamicParameters: ClassVar[tuple] = \
             ('value', 'mode', 'signature', 'nChildren', 'fullname')
 
@@ -460,8 +483,8 @@ class DspSerialApi:
         descriptorParameters: ClassVar[tuple] = \
             ('name', 'varclass', 'vartype', 'attrs', 'parent', 'period', 'dimen', 'factor')
 
-
         transceiver: ClassVar[SerialTransceiver]
+        paramsWidth: ClassVar[int]
 
 
         class Unknown():
@@ -484,11 +507,6 @@ class DspSerialApi:
 
             def __repr__(self):
                 return self.value
-
-
-        class ParamEnum(Enum):
-            def __index__(self): return self.value
-            def __str__(self): return self.name
 
 
         @unique
@@ -522,30 +540,18 @@ class DspSerialApi:
                 return member
 
             def __init__(self, idx:int, code:str, pytype:type):
-                self._struct_code = code
-                self._py_type = pytype
-
-            @property
-            def index(self)->int: return self.value
-
-            @property
-            def code(self)->str: return self._struct_code
-
-            @property
-            def pytype(self)->type: return self._py_type
+                self.code = code
+                self.pytype = pytype
 
 
-        class Attrs(ParamEnum, Flag):
+        @unique
+        class Attrs(ParamFlagEnum):
             Control = 1 << 0
             Node = 1 << 1
             Signature = 1 << 2
             Read = 1 << 3
             Setting = 1 << 4
             Telemetry = 1 << 5
-
-            def __str__(self):
-                raw = repr(self)
-                return raw[raw.index('.') + 1: raw.rfind(':')] if self.value != 0 else '<None>'
 
 
         @unique
@@ -567,13 +573,7 @@ class DspSerialApi:
                 return member
 
             def __init__(self, idx:int, sign:str):
-                self._sign = sign
-
-            @property
-            def index(self)->int: return self.value
-
-            @property
-            def sign(self)->str: return self._sign
+                self.sign = sign
 
 
         class Signature:
@@ -602,7 +602,7 @@ class DspSerialApi:
                 if (len(params) != len(self.descriptorParameters)):
                     raise TypeError("Wrong number of parameters (or 'descriptorParameters' list is somewhat wrong)")
                 try:
-                    self.name = params[0] or '<NoName>'
+                    self.name = params[0].strip() or '<NoName>'
                     self.varclass = self.Class(params[1])
                     self.vartype = self.Type(params[2])
                     self.attrs = self.Attrs(params[3])
@@ -645,6 +645,7 @@ class DspSerialApi:
 
 
         def __getattr__(self, item):
+            #dynamically create some attrs if they are accessed for the first time
             if(item == 'fullname'):
                 self.fullname = self.getFullName()
                 return self.fullname
@@ -691,15 +692,8 @@ class DspSerialApi:
 
 
         @classmethod
-        @store_value('paramNamesMaxLen')
-        def paramsWidth(cls)->int:
-            return max(len(paramName) for paramName in cls.__slots__)
-
-
-        @classmethod
-        @store_value('attrsNamesMaxLen')
-        def attrsWidth(cls)->int:
-            return max(len(attrName) for attrName in cls.Attrs.Attr.__members__)
+        def initClass(cls):
+            cls.paramsWidth = max(len(paramName) for paramName in cls.__slots__)
 
 
         def getFullName(self, sig:DspSerialApi.Signal=None, chain="") -> str:
@@ -717,8 +711,103 @@ class DspSerialApi:
         def showSigDescriptor(self):
             descriptorStrLines = [f"Signal #{self.n} descriptor:"]
             for name in self.descriptorParameters:
-                descriptorStrLines.append(f"{name.rjust(self.paramsWidth())} : {getattr(self, name)}")
+                descriptorStrLines.append(f"{name.rjust(self.paramsWidth)} : {getattr(self, name)}")
             return os.linesep.join(descriptorStrLines)
+
+
+    @init_class('initClass')
+    @add_slots
+    class Telemetry:
+
+        #Telemetry-defined parameters
+        mode: Mode
+        splitPeriod: int
+        frameSize: int
+        status: Status
+        signals: Sequence[DspSerialApi.Signal]
+        data: Sequence[Union[str, int, float, bool]]
+
+        # Descriptor-defined parameters (immutable)
+        period: int
+        maxNumSignals: int
+        maxFrameSize: int
+        attrs: Attrs
+
+        # If new telemetry-state-defined parameters are added, they must be included here to provide mutability
+        dynamicParameters: ClassVar[tuple] = \
+            ('mode', 'splitPeriod', 'frameSize', 'status', 'signals', 'data')
+
+        # Telemetry descriptor properties according to DSP Assist protocol
+        descriptorParameters: ClassVar[tuple] = \
+            ('period', 'maxNumSignals', 'maxFrameSize', 'attrs')
+
+
+        class Mode(ParamEnum):
+            RESET    = 0, 'OFF'
+            STREAM   = 1, 'RUNNING(stream)'
+            FRAMED   = 2, 'RUNNING(framewise)'
+            BUFFERED = 3, 'RUNNING(buffered)'
+            RUN      = 3, 'RUNNING(buffered)'
+            STOP     = 4, 'STOPPED'
+
+            def __new__(cls, idx:int, state:str):
+                member = object.__new__(cls)
+                member._value_ = idx
+                return member
+
+            def __init__(self, idx:int, state:str):
+                self.state = state
+
+
+        @unique
+        class Status(ParamFlagEnum):
+            DISABLED = None
+            OK       = 1 << 0
+            OVERFLOW = 1 << 1
+            ERROR1   = 1 << 2
+            ERROR2   = 1 << 3
+            ERROR3   = 1 << 4
+            ERROR4   = 1 << 5
+            AWAITING = 1 << 6
+            BADFRAME = 1 << 7
+
+
+        @unique
+        class Attrs(ParamFlagEnum):
+            Streaming = 1 << 0
+            Framing = 1 << 1
+            Buffering = 1 << 2
+
+
+        def __init__(self):
+            ...
+
+
+        def __str__(self):
+            return f"{self.mode.state}: [{', '.join(signal.name for signal in self.signals)}], status={self.status}"
+
+
+        def __repr__(self):
+            return auto_repr(self, f"is {self.mode.state} [{', '.join(signal.name for signal in self.signals)}] "
+                                   f"{'status='+str(self.status) if self.status else ''}, attrs={self.attrs}, "
+                                   f"period={self.period}{'/'+str(self.splitPeriod) if self.splitPeriod > 1 else ''}")
+
+
+        def __setattr__(self, key, value):
+            ...
+
+
+        def __iter__(self):
+            ...
+
+
+        @classmethod
+        def initClass(cls):
+            cls.paramsWidth = max(len(paramName) for paramName in cls.__slots__)
+
+
+        def showTeleDescriptor(self):
+            ...
 
 
     class Command():

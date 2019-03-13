@@ -37,7 +37,7 @@ builtin_types = [d for d in dir(builtins) if isinstance(getattr(builtins, d), ty
 
 #TODO: application params (just globals for now)
 COM = 'COM2'
-DEVICE_ADDRESS = 103
+DEVICE_ADDRESS = 12
 TIMEOUT = 0.5
 HEADER_LEN = 6              # in bytes
 STARTBYTE = 0x5A         # type: int
@@ -146,7 +146,7 @@ class SerialTransceiver(serial.Serial):
         super().__init__(*args, **kwargs)
         self.port = COM
         self.baudrate = 921600
-        self.parity = serial.PARITY_EVEN
+        self.parity = serial.PARITY_NONE
         self.write_timeout = TIMEOUT
         self.timeout = TIMEOUT
 
@@ -878,7 +878,8 @@ class DspSerialApi:
             verify lrc and return reply payload data (or raise 'BadAckError' if bad ACK is received)
         """
 
-        self.transceiver.sendPacket(bytes.fromhex(command) + data + lrc(data) or b'')
+        data = bytes.fromhex(command) + data
+        self.transceiver.sendPacket(data + lrc(data))
         reply = self.transceiver.receivePacket()
 
         if (len(reply) < 2): raise DataInvalidError("Empty reply")
@@ -1036,8 +1037,8 @@ class DspSerialApi:
         elif (data is None):
             checkingData = bytes.fromhex(self.TESTCHANNEL_DEFAULT_DATABYTE * N)
         else:
-            log.debug(f"Tch hex data: {data}")
             checkingData = bytes.fromhex(data[:N*2]) if N>0 else b''
+        log.debug(f"Tch hex data: {bytewise(checkingData, collapseAfter=self.MAX_DATA_LEN_REPR)}")
 
         checkingData += b'\x00'
         replyDataLen = len(checkingData)

@@ -3,30 +3,30 @@ from __future__ import annotations
 import builtins
 import logging
 import os
-import re
-import sys
 import random
+import re
 import string
 import struct
+import sys
 import time
 import traceback
-from collections import namedtuple, OrderedDict
+from collections import namedtuple
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum, unique, Flag
-from functools import wraps, reduce
+from enum import Enum, unique, Flag
+from functools import wraps
 from math import ceil
-from typing import Any, Union, NamedTuple, TypeVar, Optional, ClassVar, Generic, Sequence, NoReturn, Callable
+from typing import Union, NamedTuple, Optional, ClassVar, Sequence, NoReturn, Callable
 
-import bits
 import progressbar
 import serial
-from autorepr import autorepr
-from checksums import rfc1071, lrc
-from dataslots import with_slots
-from timer import Timer
-from utils import bytewise, bitwise, legacy, inject_args, inject_slots, add_slots, store_value, auto_repr, init_class
 
-from colored_logger import ColorHandler
+from Transceiver.checksums import rfc1071, lrc
+from Utils import add_slots, auto_repr, init_class, Logger
+from Utils import bits, Timer, bytewise, legacy
+from Utils.colored_logger import LogRecordFormat, LogDateFormat, LogStyle
+from dataslots import with_slots
+
+from PyAssist.exp.assist_packet_formatter import PacketFormatter
 
 
 ''' (http://plaintexttools.github.io/plain-text-table) '''
@@ -56,15 +56,16 @@ MASTER_ADDRESS = 0          # should be in reply to host machine
 
 
 # slog - should be used for general serial communication info only (packets and timeouts)
-slog = logging.getLogger(__name__+":serial")
-slog.setLevel(logging.WARNING)
-slog.addHandler(ColorHandler())
+slog = Logger('PyAssist.Comm')
+slog.setConsoleHandler(PacketFormatter(colorstyle='console',
+            fmt=LogRecordFormat, datefmt=LogDateFormat, style='{',
+            level_styles=LogStyle.records, field_styles=LogStyle.fields)
+)
+slog.setLevel(logging.DEBUG)
 
 #log - should be used for additional detailed info
-log = logging.getLogger(__name__+":main")
+log = logging.getLogger('PyAssist')
 log.setLevel(logging.DEBUG)
-log.addHandler(ColorHandler())
-log.disabled = False
 
 
 def alias(this: type): return this
@@ -178,7 +179,7 @@ class SerialTransceiver(serial.Serial):
         until valid header is found. Raise error otherwise.
         No extra data is grabbed from datastream after valid packet is successfully read.
 
-        :raises: SerialError, SerialReadTimeoutError, BadDataError, RuntimeError
+        :raises: SerialError, SerialReadTimeoutError, BadDataError, RuntimeError, BadRfcError
         :return: unwrapped high-level data
         :rtype: bytes
         """
@@ -232,7 +233,7 @@ class SerialTransceiver(serial.Serial):
             raise BadDataError(f"Bad packet (data too small, [{len(data)}] out of [{datalen + 2}])",
                                dataname="Packet", data=header+data)
         if (self.RFC_CHECK_DISABLED or int.from_bytes(rfc1071(header + data), byteorder='big') == 0):
-            slog.debug(f"Reply packet [{len(header+data)}]: {bytewise(header+data)}")
+            slog.debug(f"Reply  [{len(header+data)}]: {bytewise(header+data)}")
             if (self.in_waiting != 0):
                 log.warning(f"Unread data ({self.in_waiting} bytes) is left in a serial datastream")
                 self.reset_input_buffer()
@@ -397,9 +398,10 @@ class DspSerialApi:
     # whether all conditions, described in DSP protocol, were met
 
     #TODO: correct and unify all error-messages:
-    # "Error cause (type/value mismatch, invalid data, whatever): required {proper}, got {actual}"
+    # "Error cause (type/value mismatch, invalid data, whatever): required {expected}, got {actual}"
 
     #TODO: add to every bytewise() call 'collapseAfter=self.MAX_DATA_LEN_REPR' argument if long data output is possible
+
 
     # STRUCT CODES:
     # 1 byte (uint8)   -> B
@@ -525,7 +527,7 @@ class DspSerialApi:
 
         @unique
         class Type(ParamEnum):
-            String = 0, '' , str    # type 0: char[]  -> ???
+            String = 0, '' , str    # type 0: char[]  -> N bytes
             Bool =   1, 'B', bool   # type 1: uint_8  -> 1 byte
             Byte =   2, 'B', int    # type 2: uint_8  -> 1 byte
             Uint =   3, 'H', int    # type 3: uint_16 -> 2 bytes
@@ -869,10 +871,11 @@ class DspSerialApi:
     @staticmethod
     def __printReply(replydata:bytes)->NoReturn:
         if (isinstance(replydata, int)): slog.debug(f"Reply [1]: {hex(replydata)[2:].upper()} - {bytewise(b'')}")
-        else: slog.debug(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
+        else: log.debug(f"Reply [{len(replydata[:-1])}]: {bytewise(replydata[0:1])} - {bytewise(replydata[1:-1])}")
 
 
     def __sendCommand(self, command, expectedReplyDataLen, data:bytes=b'')->bytes:
+        # TODO: make this API method as well to provide an ability to send arbitrary packet
         """
         Add LRC byte to command data, send it to the device, receive reply packet,
             verify lrc and return reply payload data (or raise 'BadAckError' if bad ACK is received)
@@ -937,7 +940,7 @@ class DspSerialApi:
     [...]          - optional parameter
     .../...        - variations of parameter type
     ...|...        - variations of parameter value
-    <...>          - lexeme grouping (just like usual parenthesis
+    <...>          - lexeme grouping (just like usual parenthesis)
     ...            - arbitrary number of elements
     
     """
@@ -993,8 +996,8 @@ class DspSerialApi:
     def scanMode(self, command, replyDataLen, enable):
         """API: scanMode('on'/'off') """
 
-        if (enable is True or enable in ('on', 'ON', '+')): mode = b'/x01'
-        elif (enable is False or enable in ('off', 'OFF', '-')): mode = b'/x00'
+        if (enable is True or enable in ('on', 'ON', '+')): mode = b'\x01'
+        elif (enable is False or enable in ('off', 'OFF', '-')): mode = b'\x00'
         else: raise CommandError(f"Invalid mode: expected ['on'/'off'], got {enable}")
         self.__sendCommand(command, replyDataLen, mode)
 
@@ -1026,14 +1029,14 @@ class DspSerialApi:
 
     @Command(command='01 07', shortcut='tch', required=False, category=Command.Type.UTIL)
     def testChannel(self, command, replyDataLen, data=None, N=None):
-        """API: testChannel([data='XX XX ... XX'/'random', N=<data size in bytes>) """
+        """API: testChannel([data='XX XX ... XX'/'random'], [N=<data size in bytes>]) """
 
         if (N is None): N = self.TESTCHANNEL_DEFAULT_DATALEN
         elif (N > self.TESTCHANNEL_MAX_DATALEN):
             raise CommandError(f"Data length ('N') should be no more than {self.TESTCHANNEL_MAX_DATALEN}")
 
         if (data == 'random'):
-            checkingData = struct.pack(f'< {N}B', *(random.randrange(0, 0x100) for _ in range(N)))
+            checkingData = struct.pack(f'< {N}B', *(random.randrange(1, 0x100) for _ in range(N)))
         elif (data is None):
             checkingData = bytes.fromhex(self.TESTCHANNEL_DEFAULT_DATABYTE * N)
         else:
@@ -1063,7 +1066,7 @@ class DspSerialApi:
         except ParseValueError: raise DataInvalidError(f"Cannot convert data to integer value: [{reply}]")
         return nSignals
 
-
+    # BUG: replyDataLen does not consider first signal descriptor field - name
     @Command(command='03 02', shortcut='rsd', required=True, replyDataLen=17, category=Command.Type.SIG)
     def readSignalDescriptor(self, command, replyDataLen, signalNum):
         """ API: readSignalDescriptor(signalNum=<signalNum number>) """
@@ -1095,7 +1098,7 @@ class DspSerialApi:
 
     @Command(command='03 03', shortcut='ms', required=False, replyDataLen=0, category=Command.Type.SIG)
     def manageSignal(self, command, replyDataLen, signal, mode, value=None):
-        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<free|fixed|sign>, [value=<signal value>]')
+        """ API: manageSignal(signal=Signal()/<signal number>, mode=<0|1|2>/<free|fixed|sign>, [value=<signal value>])
                  if method is called with no signal value, it just changes signal mode without changing signal value
                  'mode' argument is case-insensitive """
 
@@ -1371,7 +1374,7 @@ if __name__ == '__main__':
             s.write(packet)
 
             res = s.read(s.inWaiting())
-            print(f"Reply packet: [{len(res)}] {res.hex()}")
+            print(f"Reply  : [{len(res)}] {res.hex()}")
             print(f"Reply data: [{len(res[6:-2])}] {bytewise(res[6:-2])}")
 
 
@@ -1392,7 +1395,7 @@ if __name__ == '__main__':
             s.write(packet)
             time.sleep(0.05)
             res = s.read(s.in_waiting)
-            print(f"Reply packet [{len(res)}]: {res.hex()}")
+            print(f"Reply  [{len(res)}]: {res.hex()}")
             print(f"Reply data [{len(res[6:-2])}]: {bytewise(res[6:-2])}")
             if (data == b'\x01\x03'): print(f"String: {res[7:-4].decode('utf-8')}")
 
@@ -1544,7 +1547,7 @@ if __name__ == '__main__':
                         continue
                     if (command == 'read'):
                         reply = s.read(s.in_waiting)
-                        print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
+                        print(f"Reply  [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
                         continue
 
                     if (command.startswith('sd')):
@@ -1571,7 +1574,7 @@ if __name__ == '__main__':
                         time.sleep(0.05)
                         reply = s.read(s.in_waiting)
                         replydata = unwrap(reply)
-                        slog.debug(f"Reply packet [{len(reply)}]: {bytewise(reply)}")
+                        slog.debug(f"Reply  [{len(reply)}]: {bytewise(reply)}")
                     slog.debug(f"Reply data [{len(replydata[:-1])}]: {bytewise(replydata[:1])} - {bytewise(replydata[1:-1])}")
                     if (command in ('di', 'st',)):
                         slog.debug(f"String: '{replydata[1:-1].decode('utf-8')}'")
@@ -1608,7 +1611,7 @@ if __name__ == '__main__':
                 s.write(packet)
                 time.sleep(0.05)
                 reply = s.receivePacket()
-                print(f"Reply packet [{len(reply)}]: {bytewise(reply)}")
+                print(f"Reply  [{len(reply)}]: {bytewise(reply)}")
                 input("pause...")
         print("[DONE]")
 
@@ -1856,7 +1859,7 @@ if __name__ == '__main__':
 
                     elif (command == 'read'):
                         reply = com.read(com.in_waiting)
-                        print(f"Reply packet [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
+                        print(f"Reply  [{len(reply)}]: {bytewise(reply)}") if (reply) else print("<Void>")
 
                     elif (command == 'log' and userinput[4] in loggingLvls and len(userinput) == 5):
                         log.setLevel(loggingLvls[userinput[4]])
@@ -1870,7 +1873,7 @@ if __name__ == '__main__':
                         if (failedSignals):
                             log.warning(f"{len(failedSignals)} signals failed to scan: "
                                         f"{tuple(sigNum for sigNum in failedSignals)}")
-                        print(tuple(f"{sig.name}<{assist.Signal.Type[sig.vartype]}>" for sig in signals))
+                        print(tuple(f"{sig.name}<{sig.vartype}>" for sig in signals))
 
                     elif (command.startswith('-')):
                         try: data = bytes.fromhex("".join(command[1:].split(' ')))

@@ -26,7 +26,7 @@ from Utils import bits, Timer, bytewise, legacy
 from Utils.colored_logger import LogRecordFormat, LogDateFormat, LogStyle
 from dataslots import with_slots
 
-from PyAssist.exp.assist_packet_formatter import PacketFormatter
+from PyAssist.assist_packet_formatter import PacketFormatter
 
 
 ''' (http://plaintexttools.github.io/plain-text-table) '''

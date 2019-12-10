@@ -204,6 +204,7 @@ class Assist:
             raise SignatureError(f"Data length ('n') should be no more than {CONFIG.TESTCHANNEL_MAX_DATALEN}")
 
         if data in ('r', 'random'):
+            # NOTE: zeros are not allowed => range starts from 1
             checkingData = struct.pack(f'< {n}B', *(randrange(1, 0x100) for _ in range(n)))
         elif not data:
             checkingData = bytes.fromhex(CONFIG.TESTCHANNEL_DEFAULT_DATABYTE * n)
@@ -242,7 +243,7 @@ class Assist:
             raise DataInvalidError(f"Cannot convert data to integer value: [{bytewise(reply)}]", data=reply)
         return nSignals
 
-    @Command(command='03 02', shortcut='rsd', required=True, expReply=17, category=Command.Type.SIG)
+    @Command(command='03 02', shortcut='rsd', required=True, expReply=True, category=Command.Type.SIG)
     def readSignalDescriptor(self, command: bytes, signalNum: int) -> Signal:
         """ API: readSignalDescriptor(signalNum=<signalNum number>)
             Return: Signal() object (value is not set)
@@ -251,6 +252,7 @@ class Assist:
                     BadCrcError - XOR check failed [configurable]
                     SignatureError - invalid 'signalNum' argument
                     DataInvalidError - failed to parse signal descriptor
+                    NotImplementedError - signal class is complex, not supported currently
         """
 
         if not isinstance(signalNum, int) or signalNum < 0:
@@ -262,7 +264,7 @@ class Assist:
         try:
             sigNameEndIndex = reply.find(b'\x00')
         except ValueError:
-            raise DataInvalidError(f"Cannot parse signal descriptor #{signalNum}, field #1 - "
+            raise DataInvalidError(f"Cannot parse signal #{signalNum} descriptor field #1 (name) - "
                                    f"no null character found")
         name = reply[:sigNameEndIndex].decode('utf-8', errors='replace')
 
@@ -271,19 +273,16 @@ class Assist:
             params = struct.unpack('< B B I h I B f',
                                    reply[sigNameEndIndex + 1:][:CONFIG.BASE_SIGNAL_DESCRIPTOR_SIZE])
         except StructParseError:
-            raise DataInvalidError(f"Failed to parse descriptor #{signalNum} struct: "
+            raise DataInvalidError(f"Failed to parse signal #{signalNum} descriptor struct: "
                                    f"[{bytewise(reply[sigNameEndIndex + 1:])}]", data=reply)
 
-        # TODO: check this after Signal class will be redesigned
-        # signal = self.Signal(signalNum, params=(name, *params))
-        # if (signal.varclass is not Signal.Class.Var):
-        #     raise NotImplementedError("Complex type class signals are not supported")
-        #     # TODO: Add this error to docstring 'Raises:'
-        # log.info(signal.showSigDescriptor())
-        # return signal
-        log.debug((name, *params))
+        log.debug(f"Raw #{signalNum} '{name}' signal struct: {params}")
+        signal = Signal.from_struct(signalNum, (name, *params))
+        if signal.varclass is not Signal.Class.Var:
+            raise NotImplementedError("Complex type class signals are not supported")
 
-        return (name, *params)
+        log.info(signal.showSigDescriptor())
+        return signal
 
     @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)
     def manageSignal(self, command: bytes, signal: Union[int, Signal],

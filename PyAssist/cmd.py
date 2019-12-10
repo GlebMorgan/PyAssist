@@ -62,6 +62,34 @@ def showHelp(item=None):
             raise CommandError(f"Cannot find API method name / shortcut '{item}'")
 
 
+def scandev(start, end):
+    oldTimeout = assist.transceiver.timeout
+    oldDevice = assist.transceiver.deviceAddress
+    assist.transceiver.timeout = 0.1
+
+    addr = []
+    for i in range(int(start), int(end) + 1):
+        log.info(f"Tyr addr: {i}")
+        try:
+            assist.transceiver.deviceAddress = i
+            assist.checkChannel()
+        except SerialReadTimeoutError:
+            log.info("Fail\n")
+            continue
+        else:
+            addr.append(i)
+            log.success(f"Reply from address {i}\n")
+    log.info(f"Got replies from addresses: {addr}")
+
+    assist.transceiver.timeout = oldTimeout
+    assist.transceiver.deviceAddress = oldDevice
+
+
+def test(*args):
+    if args[0] == 'scandev':
+        scandev(args[1], args[2])
+
+
 def apiTest(api):
 
     with api.transceiver as com:
@@ -100,6 +128,9 @@ def apiTest(api):
 
                     if command in ('h', 'help'):
                         showHelp(*params)
+
+                    if command in ('t', 'test'):
+                        test(*params)
 
                     elif command in commands:
                         try:

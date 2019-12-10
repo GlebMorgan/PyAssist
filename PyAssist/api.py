@@ -47,7 +47,7 @@ class Assist:
         # Cut ACK and LRC bytes
         return reply[1:-1]
 
-    def sendCommand(self, command: bytes, data: str = '') -> bytes:
+    def sendCommand(self, command: str, data: str = '') -> bytes:
         """ Send command manually
             Raises: [SerialError] - transceiver exception
                     BadAckError - device sent error acknowledgement
@@ -58,7 +58,7 @@ class Assist:
             packet = bytes.fromhex(data)
         except (ValueError, TypeError):
             raise SignatureError(f"Invalid hex string: {' '.join((command, data))}")
-        return self.transaction(command+packet)
+        return self.transaction(bytes.fromhex(command) + packet)
 
     @Command(command='01 01', shortcut='chch', required=True, expReply=8, category=Command.Type.UTIL)
     def checkChannel(self, command: bytes, data: str = None) -> bytes:
@@ -276,7 +276,7 @@ class Assist:
 
         # TODO: check this after Signal class will be redesigned
         # signal = self.Signal(signalNum, params=(name, *params))
-        # if (signal.varclass is not Signal.Class.VAR):
+        # if (signal.varclass is not Signal.Class.Var):
         #     raise NotImplementedError("Complex type class signals are not supported")
         #     # TODO: Add this error to docstring 'Raises:'
         # log.info(signal.showSigDescriptor())
@@ -304,7 +304,7 @@ class Assist:
                     DataInvalidError - reply contains extra data [configurable]
                     SignatureError - invalid 'signal' or 'mode' argument
                     ValueError - failed to assign value 'value' to 'signal'
-                    NotImplementedError - Mode.SIGN
+                    NotImplementedError - Mode.Sign
                     NotImplementedError - Signal.Type.String
         """
         # TODO: define proper default value to 'mode' argument
@@ -324,7 +324,7 @@ class Assist:
                 raise SignatureError(f"Invalid mode {mode}. Expected within [0..{len(Modes) - 1}]")
         else:
             raise SignatureError(f"Invalid 'mode' argument: {mode}")
-        if mode == Modes.SIGN:
+        if mode == Modes.Sign:
             raise NotImplementedError("Signature control mode is not supported")
 
         # Check 'signal' argument

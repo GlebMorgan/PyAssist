@@ -389,7 +389,7 @@ class ParamFlagEnum(ParamEnum, Flag):
     def index(self) -> int:
         # TODO: return tuple of corresponding flags indexes
         # i.e. Attrs(Telemetry|Read|Control) should return (0, 3, 5)
-        return NotImplemented
+        raise NotImplementedError
 
 
 class DspSerialApi:
@@ -670,7 +670,7 @@ class DspSerialApi:
 
 
         def __repr__(self):
-            return auto_repr(self, f"#{self.n} {self.fullname}[{self.vartype}] = "
+            return auto_repr(self, f"#{self.n} {self.name}[{self.vartype}] = "  # TEMP: replaced `fullname` with `name`
             f"{str(round(self.factor, 3))+'×' if self.factor != 1 else ''}"
             f"{round(self.value, 3) if self.vartype == self.Type.Float else self.value}{self.dimen.sign} "
             f"{{mode={self.mode.name}, attrs={self.attrs}, parent=#{self.parent.n if self.parent else '-1'}, "
@@ -1942,7 +1942,7 @@ if __name__ == '__main__':
                 varclass = assist.Signal.Class.VAR,
                 vartype  = assist.Signal.Type.Float,
                 attrs    = assist.Signal.Attrs(15),
-                parent   = signals[0],
+                parent   = signals[30],
                 period   = 10_000,
                 dimen    = assist.Signal.Dimen.VoltPerCelsius,
                 factor   = 0.25,
@@ -1960,9 +1960,13 @@ if __name__ == '__main__':
         print('iter(sig): ', tuple(signal), os.linesep)
         print('show descriptor:\n', signal.showSigDescriptor(), os.linesep)
 
-        print(signals[random.randint(0,100)])
-        print(repr(signals[random.randint(0,100)]))
-        print()
+        random_signal = signals[random.randint(0,100)]
+        print(random_signal)
+        print(repr(random_signal))
+
+
+# ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #
+
 
     functions = [
         lambda: ...,
@@ -1977,7 +1981,7 @@ if __name__ == '__main__':
         apiTest,
     ]
 
-    functions[-1]()
+    functions[-2]()
 
 
 

@@ -390,10 +390,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
     with TAG('service'):
         pass
 
-    def __init__(self,
-                 n: int,
-                 name: Name,
-                 *,
+    def __init__(self, n: int, name: Name, *,
                  varclass: Union[Class, int] = Class.Var,
                  vartype: Union[Type, int],
                  attrs: Union[Attrs, int],
@@ -401,7 +398,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
                  period: int = 10000,
                  dimen: Union[Dimen, int] = Dimen.Unitless,
                  factor: float = 1.0,
-                 ):
+    ):
 
         try:
             self.n = n
@@ -436,18 +433,19 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             raise DataInvalidError(f"Signal #{n} descriptor is invalid - {e.args[0]}")
 
     @classmethod
-    def from_struct(cls, params: Sequence) -> Signal:
+    def from_struct(cls, n: int, params: Sequence) -> Signal:
         """ Create Signal object and initialize it with `params` arguments
             Parameters are expected to be in order specified by Signal class
             No parameter type / value verification checks are performed
 
-            Usage example:
-                signal = Signal.from_struct((signal_n, signal_name, *descriptor_params))
+            Usage:
+            >>> signal = Signal.from_struct((signal_n, signal_name, *descriptor_params))
         """
 
         this = cls.__new__(cls)
+        this.n = n
         for i, name in enumerate(cls.__tags__['params']):
-            setattr(this, name, params[i])
+            setattr(this, name, params[i])  # BUG: what about to convert to appropriate type, ha?
         this.value = Null
         this.mode = cls.Mode.Free
         this.signature = NotImplemented
@@ -509,9 +507,9 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             )
         )
 
-    def __getattr__(self, name):
-        try: return self.children[name]
-        except KeyError: raise AttributeError
+    # def __getattr__(self, name):
+    #     try: return self.children[name]
+    #     except KeyError: raise AttributeError  # BUG: breaks PyCharm debugger introspection - investigate
 
     def __hash__(self):
         return hash(self.n)

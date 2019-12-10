@@ -59,24 +59,23 @@ class Command():
             raise TypeError(f"'category': expected '{self.Type.__class__.__name__}' member, "
                             f"got '{category.__class__.__name__}'")
 
-        """ Command id (2 bytes hex string representation) """
+        # Command id (2 bytes hex string representation)
         self.command: bytes = bytes.fromhex(command)
 
-        """ API alias """
+        # API alias
         self.shortcut: str = shortcut
 
-        """ Compulsory/optional command flag """
+        # Compulsory/optional command flag
         self.required: bool = bool(required)
 
-        """ Expected reply data presence / length
-                True - reply should contain some data apart from ACK and LRC
-                False - reply should NOT contain any data except for ACK and LRC
-                None - reply data check is not performed
-                N - reply should contain exactly N bytes
-        """
+        # Expected reply data presence / length
+        #   True - reply should contain some data apart from ACK and LRC
+        #   False - reply should NOT contain any data except for ACK and LRC
+        #   None - reply data check is not performed
+        #   N - reply should contain exactly N bytes
         self.expReply: Union[bool, int, None] = expReply
 
-        """ Command category """
+        # Command category
         self.type: Command.Type = category
 
     def __call__(self, fun):
@@ -122,7 +121,6 @@ class Command():
             raise DataInvalidError(f"Got extra reply data after end-of-string - "
                                    f"{result[len(actual) + 1:].decode('utf-8', errors='replace')}", data=result)
 
-
     @staticmethod
     def getCommandApi(commandMethod: Callable) -> str:
         docstring = commandMethod.__doc__
@@ -152,7 +150,7 @@ class Command():
             elif char == ')':
                 bracketsLevel -= 1
                 if bracketsLevel == 0:
-                    endIndex = pos+1
+                    endIndex = pos + 1
                     break
         if '\n' in docstring[methodNameStartIndex:endIndex]:
             return ' '.join(docstring[methodNameStartIndex:endIndex].split())

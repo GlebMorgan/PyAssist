@@ -337,9 +337,13 @@ class Assist:
             raise NotImplementedError("Signature control mode is not supported")
 
         # Check 'value' argument
-        if (value is None):
-            value = self.readSignal(signal)  # TODO: check return signature
-        # TODO: check 'value' type to conform with signal.vartype
+        if value is None:
+            value = self.readSignal(signal)
+        else:
+            if type(value) is not signal.vartype.pytype:
+                raise ValueError(f"Invalid value type for '{signal.name}' signal - "
+                                 f"expected '{signal.vartype.pytype.__name__}', "
+                                 f"got '{value.__class__.__name__}'")
 
         # Pack and send command
         commandParams = struct.pack('< H B', signal.n, mode)

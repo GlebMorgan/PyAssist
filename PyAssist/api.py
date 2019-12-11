@@ -122,7 +122,7 @@ class Assist:
         except IndexError:
             raise DataInvalidError('Cannot determine end of string - no zero byte found', data=reply)
 
-        if CONFIG.CHECK_DATA: Command.checkNoExtra(infoBytes, reply)
+        if CONFIG.CHECK_DATA: Command.checkStrExtra(infoBytes, reply)
 
         return infoBytes.decode('utf-8', errors='replace')
 
@@ -166,7 +166,7 @@ class Assist:
         except IndexError:
             raise DataInvalidError('Cannot determine end of string - no zero byte found', data=reply)
 
-        if CONFIG.CHECK_DATA: Command.checkNoExtra(selftestResult, reply)
+        if CONFIG.CHECK_DATA: Command.checkStrExtra(selftestResult, reply)
         self.transceiver.timeout = savedTimeout
 
         return selftestResult.decode('utf-8', errors='replace')

@@ -113,11 +113,10 @@ class Command():
     @staticmethod
     def checkEmpty(result: bytes):
         if result is not b'':
-            raise DataInvalidError(f"Got unexpected reply data: [{bytewise(result)}]",
-                                   expected=b'', actual=result)
+            raise DataInvalidError(f"Got unexpected reply data: [{bytewise(result)}]", data=result)
 
     @staticmethod
-    def checkNoExtra(result: bytes, actual: bytes):
+    def checkStrExtra(result: bytes, actual: bytes):
         if len(actual) > len(result) + 1:
             raise DataInvalidError(f"Got extra reply data after end-of-string - "
                                    f"{result[len(actual) + 1:].decode('utf-8', errors='replace')}", data=result)

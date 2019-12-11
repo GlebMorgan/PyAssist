@@ -1,7 +1,7 @@
 from __future__ import annotations as _
 import re
 from enum import Enum, Flag, unique
-from functools import wraps
+from functools import wraps, partial
 from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, List, Dict, TypeVar
 
 from Transceiver import SerialError, Transceiver
@@ -507,9 +507,10 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             )
         )
 
-    # def __getattr__(self, name):
-    #     try: return self.children[name]
-    #     except KeyError: raise AttributeError  # BUG: breaks PyCharm debugger introspection - investigate
+    def __getattr__(self, name):
+        fetch = partial(object.__getattribute__, self)
+        try: return fetch('children')[name]
+        except KeyError: raise AttributeError
 
     def __hash__(self):
         return hash(self.n)

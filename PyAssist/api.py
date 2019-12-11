@@ -38,8 +38,8 @@ class Assist:
         reply = self.transceiver.receivePacket()
 
         if CONFIG.CHECK_LRC and not lrc(reply):
-            raise BadCrcError(f"Bad data checksum (expected '{bytewise(lrc(reply[:-1]))}', "
-                              f"got '{bytewise(reply[-1:])}'). Reply discarded", data=reply)
+            raise BadCrcError(f"Bad data checksum - expected '{bytewise(lrc(reply[:-1]))}', "
+                              f"got '{bytewise(reply[-1:])}'. Reply discarded", data=reply)
 
         if (reply[0] != self.ACK_OK):
             raise BadAckError(f"Command execution failed", data=reply)
@@ -120,7 +120,7 @@ class Assist:
         try:
             infoBytes = reply.split(b'\x00', 1)[0]
         except IndexError:
-            raise DataInvalidError('Cannot determine end of string - no zero byte found', data=reply)
+            raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
         if CONFIG.CHECK_DATA: Command.checkStrExtra(infoBytes, reply)
 
@@ -139,7 +139,7 @@ class Assist:
 
         if enable in (True, 1, 'on'): mode = b'\x01'
         elif enable in (False, 0, 'off'): mode = b'\x00'
-        else: raise SignatureError(f"Invalid mode: expected True/False, got {enable}")
+        else: raise SignatureError(f"Invalid mode - expected True/False, got {enable}")
 
         reply = self.transaction(command + mode)
 
@@ -164,7 +164,7 @@ class Assist:
         try:
             selftestResult = reply.split(b'\x00', 1)[0]
         except IndexError:
-            raise DataInvalidError('Cannot determine end of string - no zero byte found', data=reply)
+            raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
         if CONFIG.CHECK_DATA: Command.checkStrExtra(selftestResult, reply)
         self.transceiver.timeout = savedTimeout
@@ -277,25 +277,28 @@ class Assist:
                                    f"[{bytewise(reply[sigNameEndIndex + 1:])}]", data=reply)
 
         log.debug(f"Raw #{signalNum} '{name}' signal struct: {params}")
+
         signal = Signal.from_struct(signalNum, (name, *params))
         if signal.varclass is not Signal.Class.Std:
             raise NotImplementedError("Complex type class signals are not supported")
 
-        log.info('\n'+signal.descriptor)
+        log.verbose('\n'+signal.descriptor)
+
         return signal
 
     @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)
     def manageSignal(self, command: bytes, signal: Union[int, Signal],
                      value: Any = None, mode: Union[int, str, Signal.Mode] = None) -> Any:
         """ API: manageSignal(signal=Signal()/<signal number>,
-                              mode=<0|1|2>/<free|fixed|sign>/Signal.Mode,
-                             [value=<signal value>])
-            Detail: read signal transaction is performed after manage signal transaction
-                        to synchronize signal value
-                    if 'value' is not specified, signal mode is changed without changing signal value
-                        + additional read signal transaction is performed
-                    if 'signal' is signal number, additional descriptor query transaction is performed
-                    'mode' argument is case-insensitive
+                             [value=<signal value>],
+                             [mode=<0|1|2>/<free|fixed|sign>/Signal.Mode])
+            Detail: Additional 'read signal' transaction is performed
+                        after 'manage signal' transaction to synchronize signal value
+                    If 'signal' is an integer (signal number),
+                        additional descriptor query transaction is performed
+                    If 'mode' or 'value' arguments are not specified,
+                        corresponding signal parameters are left unchanged
+                    Argument 'mode' is case-insensitive
             Return: Synchronized signal value
             Raises: [SerialError] - transceiver exception
                     BadAckError - device sent error acknowledgement
@@ -311,7 +314,7 @@ class Assist:
         if isinstance(signal, int):
             signal = self.readSignalDescriptor(signal)
         elif not isinstance(signal, Signal):
-            raise SignatureError(f"Invalid 'signal' argument. Expected 'Signal()' or 'int', "
+            raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
                                  f"got '{signal.__class__.__name__}'")
         if signal.vartype == Signal.Type.String:
             raise NotImplementedError(f"Cannot assign value to string-type signal "
@@ -381,7 +384,7 @@ class Assist:
         if isinstance(signal, int):
             signal = self.readSignalDescriptor(signal)
         elif not isinstance(signal, Signal):
-            raise SignatureError(f"Invalid 'signal' argument. Expected 'Signal()' or 'int', "
+            raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
                                  f"got '{signal.__class__.__name__}'")
 
         reply = self.transaction(command + struct.pack('< H', signal.n))

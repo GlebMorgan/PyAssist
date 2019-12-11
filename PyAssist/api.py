@@ -278,7 +278,7 @@ class Assist:
 
         log.debug(f"Raw #{signalNum} '{name}' signal struct: {params}")
         signal = Signal.from_struct(signalNum, (name, *params))
-        if signal.varclass is not Signal.Class.Var:
+        if signal.varclass is not Signal.Class.Std:
             raise NotImplementedError("Complex type class signals are not supported")
 
         log.info('\n'+signal.descriptor)

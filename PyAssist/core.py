@@ -327,7 +327,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Class(ParamEnum):
-        Var = 0  # TODO: rename to Std to conform with eAssist
+        Std = 0
         Array = 1
         Matrix = 2
 
@@ -563,7 +563,7 @@ if __name__ == '__main__':
         SampleSignal = Signal(
                 n        = 0,
                 name     = "SampleSignal",
-                varclass = Signal.Class.Var,
+                varclass = Signal.Class.Std,
                 vartype  = Signal.Type.Float,
                 attrs    = Signal.Attrs(15),
                 parent   = -1,

@@ -386,15 +386,24 @@ class Assist:
 
         reply = self.transaction(command + struct.pack('< H', signal.n))
 
-        # TODO: add functionality to read string-type signals!
-        try:
-            sigValue = struct.unpack(f'< {signal.vartype.code}', reply)[0]
-        except StructParseError:
-            raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
-                                   f"[{bytewise(reply)}]", data=reply)
-        signal.value = sigValue
+        if signal.vartype == Signal.Type.String:
+            try:
+                valueBytes = reply.split(b'\x00', 1)[0]
+            except IndexError:
+                raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
-        if CONFIG.CHECK_DATA: Command.checkEmpty(reply)
+            if CONFIG.CHECK_DATA: Command.checkStrExtra(valueBytes, reply)
+            sigValue = valueBytes.decode('utf-8', errors='replace')
+
+        else:
+            try:
+                sigValue = struct.unpack(f'< {signal.vartype.code}', reply)[0]
+            except StructParseError:
+                raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
+                                       f"[{bytewise(reply)}]", data=reply)
+
+        sigValue = signal.vartype.pytype(sigValue)
+        signal.value = sigValue
 
         return sigValue
 

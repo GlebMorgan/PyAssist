@@ -26,7 +26,7 @@ log.setLevel('SPAM')
 
 
 stubs = dict(
-        noValueAttr = '<NoValue>',
+        notAssigned = '<N/A>',
         noNameAttr  = '<NoName>',
         emptyAttrs  = '<NoAttrs>',
         rootSignal  = '<Root>',
@@ -374,7 +374,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         varclass: Class
         vartype: Type
         attrs: Attrs
-        parent: Union[Root, Signal]
+        parent: Union[Signal, Root, int]
         period: int
         dimen: Dimen
         factor: float
@@ -382,55 +382,48 @@ class Signal(metaclass=Classtools, slots=True, init=False):
     # Assist-defined parameters
     with TAG('extra') |const:
         n: int
-        fullname: str
-        children: Optional[Dict[Name, Signal]]
+        fullname: str  # is not assigned if .parent is not resolved
+        children: Optional[Dict[Name, Signal]]  # should be used only when tree is constructed
         descriptor: str = ... |lazy('getDescriptorView')
 
     # Internal service parameters
     with TAG('service'):
         pass
 
-    def __init__(self, n: int, name: Name, *,
-                 varclass: Union[Class, int] = Class.Var,
+    def __init__(self, n: int, name: Name,
+                 varclass: Union[Class, int],
                  vartype: Union[Type, int],
                  attrs: Union[Attrs, int],
-                 parent: Union[Signal, int, None],
+                 parent: Union[Signal, Root, int, None],  # parent=None -> .parent is not assigned
                  period: int = 10000,
                  dimen: Union[Dimen, int] = Dimen.Unitless,
                  factor: float = 1.0,
     ):
+        """ Create Signal object on its own (unbound from SignalsTree) """
 
-        try:
-            self.n = n
+        self.n = n
 
-            self.name = name or stubs['noNameAttr']  # CONSIDER: name.strip()?
-            self.varclass = self.Class(varclass)
-            self.vartype = self.Type(vartype)
-            self.attrs = self.Attrs(attrs)  # TODO: Consider ASSIGN_NODE config option
-            self.period = int(period)
-            self.dimen = self.Dimen(dimen)
-            self.factor = float(factor)
+        self.name = name or stubs['noNameAttr']  # CONSIDER: name.strip()?
+        self.varclass = self.Class(varclass)
+        self.vartype = self.Type(vartype)
+        self.attrs = self.Attrs(attrs)  # TODO: Implement ASSIGN_NODE config option
+        self.period = int(period)
+        self.dimen = self.Dimen(dimen)
+        self.factor = float(factor)
 
-            if parent == -1 or parent is None:
-                parent = self.root
-            elif isinstance(parent, int):
-                parent = self.tree[parent]
-            elif not isinstance(parent, Signal):
+        if parent is not None:
+            if isinstance(parent, int):
+                self.parent = parent
+            elif isinstance(parent, (Signal, self.Root)):
+                self.parent = parent
+                self.fullname = f"{self.parent.name}.{name}"
+            else:
                 raise TypeError(f"Invalid 'parent' parameter type: "
-                                f"expected 'Signal' or 'int', got {type(parent)}")
-            self.parent = parent
-            self.fullname = f"{parent.name}.{name}" if parent is not self.root else name
+                                f"expected 'Signal', 'Root' or 'int', got {type(parent)}")
 
-            self.value = Null
-            self.mode = self.Mode.Free
-            self.children = {}
-            self.signature = NotImplemented
-
-            # CONSIDER: duplicate names are not be possible if using dict
-            self.parent.children[name] = self
-
-        except (ValueError, TypeError) as e:
-            raise DataInvalidError(f"Signal #{n} descriptor is invalid - {e.args[0]}")
+        self.value = Null
+        self.mode = self.Mode.Free
+        self.signature = NotImplemented
 
     @classmethod
     def from_struct(cls, n: int, params: Sequence) -> Signal:
@@ -439,28 +432,38 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             No parameter type / value verification checks are performed
 
             Usage:
-            >>> signal = Signal.from_struct((signal_n, signal_name, *descriptor_params))
+            >>> signal = Signal.from_struct(signal_n, (signal_name, *descriptor_params))
         """
 
         this = cls.__new__(cls)
         this.n = n
+
         for i, name in enumerate(cls.__tags__['params']):
-            setattr(this, name, params[i])  # BUG: what about to convert to appropriate type, ha?
+            try:
+                value = int(params[i]) if name == 'parent' else cls[name].type(params[i])
+            except (ValueError, TypeError) as e:
+                raise DataInvalidError(f"Signal #{n} descriptor is invalid - {e.args[0]}")
+            setattr(this, name, value)
+
         this.value = Null
         this.mode = cls.Mode.Free
         this.signature = NotImplemented
+
         return this
 
     def copy(self, **kwargs):  # TESTME
         new = self.__new__(self.__class__)
         for name in self.__slots__:
-            value = getattr(self, name)
+            try:
+                value = getattr(self, name)
+            except AttributeError:
+                continue
             if name in kwargs:
                 newValue = kwargs[name]
                 if isinstance(newValue, self.__class__[name].type):
                     value = newValue
                 else:
-                    raise TypeError(f"Invalid '{name}' attr of '{self.name}' signal: "
+                    raise TypeError(f"Invalid '{name}' attr of '{self.name}' signal copy: "
                                     f"expected '{type(value)}', got '{type(newValue)}'")
             setattr(new, name, value)
         return new
@@ -481,8 +484,10 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
                      'parent', 'period', 'dimen', 'factor', 'signature'):
             lines.append(f"{name.rjust(self.attrNamesWidth)} - "
-                         f"{getattr(self, name, stubs['noValueAttr'])}")
-        lines.append(f"{'children'.rjust(self.attrNamesWidth)} - [{', '.join(self.children)}]")
+                         f"{getattr(self, name, stubs['notAssigned'])}")
+        children = f"[{', '.join(getattr(self, 'children'))}]" if hasattr(self, 'children') else stubs['notAssigned']
+        lines.append(f"{'children'.rjust(self.attrNamesWidth)} - {children}")
+
         return '\n'.join(lines)
 
     def __str__(self):
@@ -533,7 +538,7 @@ if __name__ == '__main__':
                 varclass = Signal.Class.Var,
                 vartype  = Signal.Type.Float,
                 attrs    = Signal.Attrs(15),
-                parent   = None,
+                parent   = -1,
                 period   = 10_000,
                 dimen    = Signal.Dimen.VoltPerCelsius,
                 factor   = 0.25,
@@ -541,12 +546,11 @@ if __name__ == '__main__':
         SampleSignal.value = 679 / 13
 
         SampleChild = SampleSignal.copy(name='SampleChild', parent=SampleSignal)
-        SampleSignal.children['SampleChild'] = SampleChild
+        SampleSignal.children = {'SampleChild': SampleChild}
 
         p('signal', SampleSignal)
         print('__slots__: ', SampleSignal.__slots__, '\n')
         p('sig.name', SampleSignal.name)
-        p('sig.fullname', SampleSignal.fullname)
         p('sig.parent', SampleSignal.parent)
         # p('sig.parent.name', SampleSignal.parent.name)
         p('sig.children', SampleSignal.children)

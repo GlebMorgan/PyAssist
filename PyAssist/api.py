@@ -286,7 +286,7 @@ class Assist:
 
     @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)
     def manageSignal(self, command: bytes, signal: Union[int, Signal],
-                     value: Any = None, mode: Union[int, str, Signal.Mode] = 0) -> Any:
+                     value: Any = None, mode: Union[int, str, Signal.Mode] = None) -> Any:
         """ API: manageSignal(signal=Signal()/<signal number>,
                               mode=<0|1|2>/<free|fixed|sign>/Signal.Mode,
                              [value=<signal value>])
@@ -306,25 +306,6 @@ class Assist:
                     NotImplementedError - Mode.Sign
                     NotImplementedError - Signal.Type.String
         """
-        # TODO: define proper default value to 'mode' argument
-
-        # Check 'mode' argument
-        Modes = Signal.Mode
-        if isinstance(mode, Modes):
-            mode = mode.value  # convert to mode index
-        elif isinstance(mode, str):
-            try:
-                mode = Modes[mode.lower()].value  # convert to mode index
-            except KeyError:
-                raise SignatureError(f"Invalid mode '{mode}'. Expected within " +
-                                     f"[{', '.join((s.lower() for s in Modes.__members__.keys()))}]")
-        elif isinstance(mode, int):
-            if mode >= len(Modes):
-                raise SignatureError(f"Invalid mode {mode}. Expected within [0..{len(Modes) - 1}]")
-        else:
-            raise SignatureError(f"Invalid 'mode' argument: {mode}")
-        if mode == Modes.Sign:
-            raise NotImplementedError("Signature control mode is not supported")
 
         # Check 'signal' argument
         if isinstance(signal, int):
@@ -334,7 +315,26 @@ class Assist:
                                  f"got '{signal.__class__.__name__}'")
         if signal.vartype == Signal.Type.String:
             raise NotImplementedError(f"Cannot assign value to string-type signal "
-                                      "(for what on Earth reason do you wanna do that???)")
+                                      "(for what on Earth reason do you wanna do that btw???)")
+
+        # Check 'mode' argument
+        Modes = Signal.Mode
+        if mode is None:
+            mode = signal.mode.value
+        elif isinstance(mode, Modes):
+            mode = mode.value  # convert to mode index
+        elif isinstance(mode, str):
+            try:
+                mode = Modes[mode.capitalize()].value  # convert to mode index
+            except KeyError:
+                raise SignatureError(f"Invalid mode '{mode}' - expected within " +
+                                     f"[{', '.join((s.lower() for s in Modes.__members__.keys()))}]")
+        elif isinstance(mode, int) and mode >= len(Modes):
+            raise SignatureError(f"Invalid mode {mode} - expected within [0..{len(Modes) - 1}]")
+        else:
+            raise SignatureError(f"Invalid 'mode' argument - {mode}")
+        if mode == Modes.Sign:
+            raise NotImplementedError("Signature control mode is not supported")
 
         # Check 'value' argument
         if (value is None):

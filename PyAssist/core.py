@@ -331,8 +331,9 @@ class Signal(metaclass=Classtools, slots=True, init=False):
     @unique
     class Class(ParamEnum):
         Std = 0
-        Array = 1
-        Matrix = 2
+        Enum = 1
+        Array = 2
+        Matrix = 3
 
     @unique
     class Type(ParamEnum):

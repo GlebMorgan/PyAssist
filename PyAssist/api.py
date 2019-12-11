@@ -281,7 +281,7 @@ class Assist:
         if signal.varclass is not Signal.Class.Var:
             raise NotImplementedError("Complex type class signals are not supported")
 
-        log.info(signal.showSigDescriptor())
+        log.info('\n'+signal.descriptor)
         return signal
 
     @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)

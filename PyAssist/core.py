@@ -4,6 +4,7 @@ from enum import Enum, Flag, unique
 from functools import wraps, partial
 from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, List, Dict, TypeVar
 
+from CPython.Lib.functools import singledispatchmethod
 from Transceiver import SerialError, Transceiver
 from Utils import Logger, bytewise, Dummy, auto_repr, classproperty, Null, formatDict, SingletonType
 from src.Experiments.attr_tagging_concise import Classtools, TAG, const, lazy
@@ -186,8 +187,8 @@ class SignalsTree:
             Allows for efficient elements access both by integer indexes and string names
             len() returns actual number of stored Signal objects
         Usage:
-            >>> signals = SignalsTree(N)  # 'N' is optional storage size for pre-allocation
-            >>> signals.add(Signal('Test', ...))
+            >>> signals = SignalsTree()
+            >>> signals.append(Signal('Test', ...))
             >>> signals[0]
             <Signal Test = ... at 0x...>
             >>> signals['Test']
@@ -195,23 +196,47 @@ class SignalsTree:
 
     """
 
-    def __init__(self, count=None):
-        self.count: int = count  # overall signals count (acquired from device)
-        self.data: List[Signal] = [] if count is None else [None]*count  # (allows for access by index)
-        self.names: Dict[Name, Union[Signal, List[Signal]]] = {}  # (allows for access by name)
+    def __init__(self):
+        self.data: List[Signal] = []  # (access by index)
+        self.names: Dict[Name, Union[Signal, List[Signal]]] = {}  # (access by name)
 
-    def __getitem__(self, key: Union[str, int]) -> Signal:
-        try:
-            return self.data[key]
-        except TypeError:
-            if not isinstance(key, str):
-                raise ValueError(f"Invalid signal name - expected 'str', got '{type(key)}'")
-            return self.getByName(key)
+    @singledispatchmethod
+    def __getitem__(self, key: object):
+        raise TypeError(f"Invalid key type - expected 'str' or 'int', got '{key.__class__.__name__}'")
 
-    def add(self, signal: Signal):
+    @__getitem__.register(int)
+    def getByIndex(self, key: int) -> Signal:
+        return self.data[key]
+
+    @__getitem__.register(str)
+    def getByName(self, key: str) -> Signal:
+        # Try to get signal by name (or by last fullname component, if hierarchical name is given)
+        name: str = key.rsplit('.', maxsplit=1)[-1]
+        item: Union[Signal, list] = self.names[name]
+
+        # If fetched signal object, we are lucky
+        if isinstance(item, Signal):
+            return item
+
+        # Else, we got a list of signals with coincident names
+        # Go search among obtained signals list (item) by full name component provided (key)
+        else:
+            matches = tuple(signal for signal in self.names[name] if signal.fullname.endswith(key))
+            if len(matches) == 1:
+                return matches[0]
+            else:
+                raise KeyError(f"Ambiguous signal name '{key}' - "
+                               f"[{', '.join(signal.fullname for signal in matches)}]")
+
+    def append(self, signal: Signal):
         if not isinstance(signal, Signal):
-            raise TypeError(f"Only 'Signal' entries are allowed, got '{type(signal)}'")
-        self.data[signal.n] = signal
+            raise TypeError(f"Only 'Signal' entries are allowed, got '{signal.__class__.__name__}'")
+        if signal.n != len(self.data):
+            raise ValueError("Signals should be added in-order - "
+                             f"expected signal number {len(self.data)}, got {signal.n}")
+
+        self.data.append(signal)
+
         name = signal.name
         if name not in self.names:
             self.names[name] = signal
@@ -220,13 +245,16 @@ class SignalsTree:
         else:
             self.names[name].append(signal)
 
-    def getByName(self, name: str) -> Signal:
-        item: Union[Signal, list] = self.names[name]
-        if isinstance(item, Signal):
-            return item
+        parentNum = signal.parent
+        if parentNum == -1:
+            signal.__class__.parent.slot.__set__(signal, Signal.root)
+            signal.fullname = name
         else:
-            raise KeyError(f"Ambiguous signal name '{name}' - "
-                           f"[{', '.join(signal.fullname for signal in item)}]")
+            signal.__class__.parent.slot.__set__(signal, self.data[parentNum])
+            signal.fullname = f"{signal.parent.fullname}.{name}"
+
+        signal.parent.children[name] = signal
+        signal.children = {}
 
     def copy(self):
         dup = self.__class__()
@@ -281,8 +309,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         """
 
         def __init__(self):
+            self.n = -1
             self.name: Name = stubs['rootSignal']
-            self.fullname: str = self.name
             self.children: Dict[Name, Signal] = {}
 
         def __str__(self):
@@ -299,7 +327,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Class(ParamEnum):
-        Var = 0
+        Var = 0  # TODO: rename to Std to conform with eAssist
         Array = 1
         Matrix = 2
 
@@ -360,7 +388,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     transceiver: ClassVar[Transceiver]
     tree: ClassVar[SignalsTree] = SignalsTree()  # CONSIDER: change implementation to tree, if worthwhile
-    root: ClassVar[Root] = Root()
+    root: ClassVar[Root] = Root()  # TODO: redesign to allow for multiple trees (move .root inside tree)
 
     # Signal-defined parameters
     with TAG('variables'):
@@ -574,16 +602,16 @@ if __name__ == '__main__':
         from random import choice, sample, randint, random
 
         with Timer("Generate 100 signals"):
-            signals = [None]
-            for k in range(99):
+            signals = SignalsTree()
+            for k in range(100):
                 s = Signal(
                         n=k,
-                        name=f"{''.join(sample('ertuopasdfghklxcbnm', randint(2, 8)))}".capitalize(),
+                        name=f"{''.join(sample('ertuopasdfghklxcbnm', randint(2, 8)))}[{k}]".capitalize(),
                         varclass=Signal.Class(randint(0, 2)),
                         vartype=Signal.Type(randint(0, 7)),
                         attrs=Signal.Attrs(randint(0, 15)),
-                        parent=choice((*signals, None)),
-                        period=k * randint(10, 1000) * 10,
+                        parent=choice((*signals, Signal.root)).n,
+                        period=randint(10, 1000) * 10,
                         dimen=Signal.Dimen(randint(0, 9)),
                         factor=choice((1, random() * 10)),
                 )

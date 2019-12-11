@@ -265,7 +265,7 @@ class SignalsTree:
         dup.names = self.names.copy()
         return dup
 
-    def __str__(self, smooth=True):
+    def __str__(self, smooth=False):
         """ Render signals tree
             Raises:
                 RecursionError - signals tree contains cycle references
@@ -390,7 +390,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         def __repr__(self): return str(NotImplemented)
 
     transceiver: ClassVar[Transceiver]
-    tree: ClassVar[SignalsTree] = SignalsTree()  # CONSIDER: change implementation to tree, if worthwhile
+    tree: ClassVar[SignalsTree] = SignalsTree()
     root: ClassVar[Root] = Root()  # TODO: redesign to allow for multiple trees (move .root inside tree)
 
     # Signal-defined parameters
@@ -434,7 +434,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
         self.n = n
 
-        self.name = name or stubs['noNameAttr']  # CONSIDER: name.strip()?
+        self.name = name  # CONSIDER: name.strip()?
         self.varclass = self.Class(varclass)
         self.vartype = self.Type(vartype)
         self.attrs = self.Attrs(attrs)  # TODO: Implement ASSIGN_NODE config option
@@ -522,16 +522,18 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return '\n'.join(lines)
 
     def __str__(self):
-        value = (round(self.value, 3)
-                if self.vartype == self.Type.Float and self.value is not Null
-                else self.value)
-        return f"{self.name}={value}"
+        return "{name}={value}".format(
+                name = self.name or stubs['noNameAttr'],
+                value = round(self.value, 3)
+                        if self.vartype == self.Type.Float and self.value is not Null
+                        else self.value
+        )
 
     def __repr__(self):
         return auto_repr(self,
             "#{n} {name} = {value}{factor}{dimen} <{type}> {{{mode}}} {attrs}".format(
                 n = self.n,
-                name = self.fullname if hasattr(self, 'fullname') else self.name,
+                name = self.fullname if hasattr(self, 'fullname') else self.name or stubs['noNameAttr'],
                 value = round(self.value, 3)
                         if self.value is not Null and self.vartype == self.Type.Float
                         else self.value,

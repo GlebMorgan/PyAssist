@@ -246,12 +246,15 @@ class SignalsTree:
             self.names[name].append(signal)
 
         parentNum = signal.parent
-        if parentNum == -1:
-            signal.__class__.parent.slot.__set__(signal, Signal.root)
+
+        if parentNum == -1:  # parent is Root
+            Signal.parent.slot.__set__(signal, Signal.root)
             signal.fullname = name
-        else:
-            signal.__class__.parent.slot.__set__(signal, self.data[parentNum])
+        else:  # parent is some other signal
+            Signal.parent.slot.__set__(signal, self.data[parentNum])
             signal.fullname = f"{signal.parent.fullname}.{name}"
+            if Signal.ASSIGN_NODE is True:
+                Signal.attrs.slot.__set__(signal.parent, signal.attrs | Signal.Attrs.Node)
 
         signal.parent.children[name] = signal
         signal.children = {}
@@ -609,8 +612,8 @@ if __name__ == '__main__':
                         name=f"{''.join(sample('ertuopasdfghklxcbnm', randint(2, 8)))}[{k}]".capitalize(),
                         varclass=Signal.Class(randint(0, 2)),
                         vartype=Signal.Type(randint(0, 7)),
-                        attrs=Signal.Attrs(randint(0, 15)),
-                        parent=choice((*signals, Signal.root)).n,
+                        attrs=Signal.Attrs(randint(0, 15)) & ~Signal.Attrs.Node,
+                        parent=choice((*(s for s in signals if len(s.fullname.split('.')) < 5), Signal.root)).n,
                         period=randint(10, 1000) * 10,
                         dimen=Signal.Dimen(randint(0, 9)),
                         factor=choice((1, random() * 10)),

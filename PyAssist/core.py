@@ -19,7 +19,7 @@ log.setLevel('SPAM')
 
 # ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #
 
-# TODO: Access children of a signal through its name (like 'Parent.Children')
+# ✓ Access children of a signal through its name (like 'Parent.Children')
 
 # CONSIDER: struct.Struct optimization in Signal and API
 
@@ -49,7 +49,6 @@ class Command():
         SIG = 3
         TELE = 4
 
-    # CONSIDER: can I get rid of `replyDataLen`?
     def __init__(self, command: str, shortcut: str, required=False, expReply=None, category=Type.NONE):
         try:
             if (len(bytes.fromhex(command)) != 2): raise ValueError
@@ -176,9 +175,26 @@ class ParamFlagEnum(ParamEnum, Flag):
 
     @property
     def index(self) -> int:
-        # TODO: return tuple of corresponding flags indexes
+        # CONSIDER: return tuple of corresponding flags indexes
         # i.e. Attrs(Telemetry|Read|Control) should return (0, 3, 5)
         raise NotImplementedError
+
+
+class Root(metaclass=SingletonType):
+    """ Idle container class for top-level Signal objects
+        Used in signals tree rendering
+    """
+
+    def __init__(self):
+        self.n = -1
+        self.name: Signal.Name = stubs['rootSignal']
+        self.children: Dict[Signal.Name, Signal] = {}
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return auto_repr(self, 'signal')
 
 
 class SignalsTree:
@@ -195,9 +211,13 @@ class SignalsTree:
 
     """
 
+    # Automatically add Attrs.Node flag to node signal when constructing a tree
+    ASSIGN_NODE = True
+
     def __init__(self):
+        self.root = Root()
         self.data: List[Signal] = []  # (access by index)
-        self.names: Dict[Name, Union[Signal, List[Signal]]] = {}  # (access by name)
+        self.names: Dict[Signal.Name, Union[Signal, List[Signal]]] = {}  # (access by name)
 
     @singledispatchmethod
     def __getitem__(self, key: object):
@@ -247,7 +267,7 @@ class SignalsTree:
         parentNum = signal.parent
 
         if parentNum == -1:  # parent is Root
-            Signal.parent.slot.__set__(signal, Signal.root)
+            Signal.parent.slot.__set__(signal, self.root)
             signal.fullname = name
         else:  # parent is some other signal
             Signal.parent.slot.__set__(signal, self.data[parentNum])
@@ -280,8 +300,8 @@ class SignalsTree:
                 if signal.children:
                     render(prefix + (void if i is last else line), signal.children.values())
 
-        lines.append(str(Signal.root))
-        render('', Signal.root.children.values())
+        lines.append(str(self.root))
+        render('', self.root.children.values())
         return '\n'.join(lines)
 
     def __repr__(self):
@@ -297,29 +317,10 @@ class SignalsTree:
         return iter(self.data)
 
 
-Name = TypeVar('Name', bound=str)  # Signal name
-
 class Signal(metaclass=Classtools, slots=True, init=False):
     """ Signal docstring """
 
-    # Automatically add Attrs.Node flag to node signal
-    ASSIGN_NODE = True
-
-    class Root(metaclass=SingletonType):
-        """ Idle container class for top-level Signal objects
-            Used in signals tree rendering
-        """
-
-        def __init__(self):
-            self.n = -1
-            self.name: Name = stubs['rootSignal']
-            self.children: Dict[Name, Signal] = {}
-
-        def __str__(self):
-            return self.name
-
-        def __repr__(self):
-            return auto_repr(self, 'signal')
+    Name = TypeVar('Name', bound=str)  # Signal name
 
     @unique
     class Mode(ParamEnum):
@@ -391,7 +392,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     transceiver: ClassVar[Transceiver]
     tree: ClassVar[SignalsTree] = SignalsTree()
-    root: ClassVar[Root] = Root()  # TODO: redesign to allow for multiple trees (move .root inside tree)
 
     # Signal-defined parameters
     with TAG('variables'):
@@ -437,7 +437,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         self.name = name  # CONSIDER: name.strip()?
         self.varclass = self.Class(varclass)
         self.vartype = self.Type(vartype)
-        self.attrs = self.Attrs(attrs)  # TODO: Implement ASSIGN_NODE config option
+        self.attrs = self.Attrs(attrs)
         self.period = int(period)
         self.dimen = self.Dimen(dimen)
         self.factor = float(factor)
@@ -445,7 +445,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         if parent is not None:
             if isinstance(parent, int):
                 self.parent = parent
-            elif isinstance(parent, (Signal, self.Root)):
+            elif isinstance(parent, (Signal, Root)):
                 self.parent = parent
                 self.fullname = f"{self.parent.name}.{name}"
             else:
@@ -615,13 +615,13 @@ if __name__ == '__main__':
                         varclass=Signal.Class(randint(0, 2)),
                         vartype=Signal.Type(randint(0, 7)),
                         attrs=Signal.Attrs(randint(0, 15)) & ~Signal.Attrs.Node,
-                        parent=choice((*(s for s in signals if len(s.fullname.split('.')) < 5), Signal.root)).n,
+                        parent=choice((*(s for s in signals if len(s.fullname.split('.')) < 5), Signal.tree.root)).n,
                         period=randint(10, 1000) * 10,
                         dimen=Signal.Dimen(randint(0, 9)),
                         factor=choice((1, random() * 10)),
                 )
                 if s.vartype.pytype == float:
-                    s.value = choice((Null, 1 / 3, 0.001, 273549.9826543, 0.0000000001, 1))
+                    s.value = choice((Null, 1 / 3, 0.001, 273549.9826543, 0.0000000001, 1.0))
                 elif s.vartype.pytype == int:
                     s.value = choice((Null, 1, 0, 1_000_000, 28))
                 elif s.vartype.pytype == bool:
@@ -633,8 +633,8 @@ if __name__ == '__main__':
                 signals.append(s)
 
         random_signal = signals[randint(0, 99)]
+        print(random_signal.tree)
+        print()
         print(random_signal)
         print(repr(random_signal))
         print(random_signal.descriptor)
-        print()
-        print(random_signal.tree)

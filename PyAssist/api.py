@@ -1,14 +1,16 @@
 import struct
+import sys
 from itertools import cycle
 from random import randrange
-from typing import Union, Any
+from typing import Union, Any, Tuple
 
+import progressbar
 from Transceiver import Transceiver, lrc, BadCrcError
+from Utils import bytewise, Logger
 
-from PyAssist.config import CONFIG
+from .config import CONFIG
 from .core import Command, Signal
 from .errors import *
-from Utils import bytewise, Logger
 
 
 log = Logger('API')
@@ -410,4 +412,33 @@ class Assist:
 
         return sigValue
 
-# TODO: telemetry handling methods
+    # TODO: telemetry handling methods
+
+    def simpleScanSignals(self, attempts: int = 2, showProgress: bool = False) -> Tuple[tuple, tuple]:
+        nSignals = self.signalsCount()
+        signals = []  # signal objects acquired with .readSignalDescriptor()
+        failed = []  # indexes of signals which descriptor query failed
+        if showProgress is True:
+            progressbarElements = (
+                progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
+                ' ', progressbar.Percentage()
+            )
+            progress = progressbar.ProgressBar(widgets=progressbarElements, fd=sys.stdout)
+        else:
+            progress = iter
+
+        loggers = None if showProgress is False else 'all'
+        with Logger.suppressed(target=loggers, level='WARNING'):
+            for signalNum in progress(range(nSignals)):
+                for _ in range(attempts):
+                    try:
+                        signals.append(self.readSignalDescriptor(signalNum))
+                        break
+                    except BadAckError:
+                        continue
+                else:
+                    failed.append(signalNum)
+
+        return tuple(signals), tuple(failed)
+
+    def scanSignals(self): ...  # TODO: scan to .tree

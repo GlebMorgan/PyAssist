@@ -3,7 +3,7 @@ import os
 from Transceiver import PelengTransceiver
 from Transceiver.serial_transceiver import slog
 from Transceiver.errors import *
-from Utils import bytewise, Logger
+from Utils import bytewise, Logger, formatList
 from Utils.colored_logger import LogRecordFormat, LogStyle, LogDateFormat, Formatters
 
 from .assist_packet_formatter import PacketFormatter
@@ -106,12 +106,12 @@ def apiTest(api):
                     log.error("Terminated :)")
                     break
 
-                elif userinput == 'flush':
-                    com.reset_input_buffer()
-
-                elif userinput == 'read':
-                    reply = com.read(com.in_waiting)
-                    log.verbose(f"Buffer [{len(reply)}]: {bytewise(reply)}") if (reply) else log.verbose("<Void>")
+                elif userinput == 'scans':
+                    signals, failed = api.simpleScanSignals(showProgress=True)
+                    print(f"Signals:", formatList(signals))
+                    if failed:
+                        print("Failed to get descriptors for signals: "
+                              f"[{', '.join('#'+num for num in failed)}]")
 
                 elif userinput.startswith('-'):
                     result = api.sendCommand(userinput[1:].strip())
@@ -122,6 +122,13 @@ def apiTest(api):
                         log.verbose(eval(userinput[1:].strip(), *env))
                     except SyntaxError:
                         exec(userinput[1:].strip(), *env)
+
+                elif userinput == 'flush':
+                    com.reset_input_buffer()
+
+                elif userinput == 'read':
+                    reply = com.read(com.in_waiting)
+                    log.verbose(f"Buffer [{len(reply)}]: {bytewise(reply)}") if (reply) else log.verbose("<Void>")
 
                 else:
                     command, *params = userinput.split()

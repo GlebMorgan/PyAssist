@@ -322,6 +322,29 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     Name = TypeVar('Name', bound=str)  # Signal name
 
+    class ScanModeDescriptor:
+        """ Scan mode flag and context manager to enable scanMode inside its body """
+
+        def __init__(self):
+            self.enabled = False
+
+        def __enter__(self):
+            Signal.api.scanMode(True)
+            self.enabled = True
+            log.info("Scan mode: on")
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            Signal.api.scanMode(False)
+            self.enabled = False
+            log.info("Scan mode: off")
+
+        def __get__(self, instance, owner):
+            if instance is None: return self
+            return self.enabled
+
+        def test(self): pass
+
+
     @unique
     class Mode(ParamEnum):
         Free = 0  # Device-driven
@@ -390,7 +413,9 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
         def __repr__(self): return str(NotImplemented)
 
+    api: Assist
     transceiver: ClassVar[Transceiver]
+    scanMode: ClassVar[bool] = ScanModeDescriptor()
     tree: ClassVar[SignalsTree] = SignalsTree()
 
     # Signal-defined parameters

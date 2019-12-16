@@ -8,7 +8,7 @@ from Utils.colored_logger import LogRecordFormat, LogStyle, LogDateFormat, Forma
 
 from .assist_packet_formatter import PacketFormatter
 from .api import Assist
-from .core import Command
+from .core import Command, Signal
 from .errors import *
 
 
@@ -170,5 +170,8 @@ def apiTest(api):
 if __name__ == '__main__':
 
     assist = Assist(transceiver=PelengTransceiver(device=12, port='COM2'))
+
+    # TEMP: ▼ Remove after api is redesigned to use module-level functions, not Assist methods
+    Signal.api = assist
 
     apiTest(assist)

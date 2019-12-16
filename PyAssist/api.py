@@ -22,6 +22,14 @@ class Assist:
     ACK_OK = 0x00
     ACK_BAD = 0xFF
 
+    CHECK_DATA = True
+    CHECK_LRC = True
+    SELFTEST_TIMEOUT_SEC = 5
+    TESTCHANNEL_DEFAULT_DATALEN = 255
+    TESTCHANNEL_MAX_DATALEN = 1023
+    TESTCHANNEL_DEFAULT_DATABYTE = 'AA'
+    BASE_SIGNAL_DESCRIPTOR_SIZE = 17
+
     def __init__(self, transceiver: Transceiver):
         self.transceiver = transceiver
 
@@ -39,7 +47,7 @@ class Assist:
         self.transceiver.sendPacket(data + lrc(data))
         reply = self.transceiver.receivePacket()
 
-        if CONFIG.CHECK_LRC and not lrc(reply):
+        if self.CHECK_LRC and not lrc(reply):
             raise BadCrcError(f"Bad data checksum - expected '{bytewise(lrc(reply[:-1]))}', "
                               f"got '{bytewise(reply[-1:])}'. Reply discarded", data=reply)
 
@@ -104,7 +112,7 @@ class Assist:
 
         reply = self.transaction(command)
 
-        if CONFIG.CHECK_DATA: Command.checkEmpty(reply)
+        if self.CHECK_DATA: Command.checkEmpty(reply)
 
     @Command(command='01 03', shortcut='i', required=True, expReply=True, category=Command.Type.UTIL)
     def deviceInfo(self, command: bytes) -> str:
@@ -124,7 +132,7 @@ class Assist:
         except IndexError:
             raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
-        if CONFIG.CHECK_DATA: Command.checkStrExtra(infoBytes, reply)
+        if self.CHECK_DATA: Command.checkStrExtra(infoBytes, reply)
 
         return infoBytes.decode('utf-8', errors='replace')
 
@@ -145,7 +153,7 @@ class Assist:
 
         reply = self.transaction(command + mode)
 
-        if CONFIG.CHECK_DATA: Command.checkEmpty(reply)
+        if self.CHECK_DATA: Command.checkEmpty(reply)
 
     @Command(command='01 05', shortcut='st', required=False, expReply=True, category=Command.Type.UTIL)
     def selftest(self, command: bytes) -> str:
@@ -159,7 +167,7 @@ class Assist:
         """
 
         savedTimeout = self.transceiver.timeout
-        self.transceiver.timeout = CONFIG.SELFTEST_TIMEOUT_SEC
+        self.transceiver.timeout = self.SELFTEST_TIMEOUT_SEC
 
         reply = self.transaction(command)
 
@@ -168,7 +176,7 @@ class Assist:
         except IndexError:
             raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
-        if CONFIG.CHECK_DATA: Command.checkStrExtra(selftestResult, reply)
+        if self.CHECK_DATA: Command.checkStrExtra(selftestResult, reply)
         self.transceiver.timeout = savedTimeout
 
         return selftestResult.decode('utf-8', errors='replace')
@@ -185,7 +193,7 @@ class Assist:
 
         reply = self.transaction(command)
 
-        if CONFIG.CHECK_DATA: Command.checkEmpty(reply)
+        if self.CHECK_DATA: Command.checkEmpty(reply)
 
     @Command(command='01 07', shortcut='tch', required=False, expReply=True, category=Command.Type.UTIL)
     def testChannel(self, command: bytes, data: str = None, n: int = None) -> bytes:
@@ -199,17 +207,17 @@ class Assist:
         """
 
         if n is None:
-            n = CONFIG.TESTCHANNEL_DEFAULT_DATALEN
+            n = self.TESTCHANNEL_DEFAULT_DATALEN
         elif not isinstance(n, int) or n < 0:
             raise SignatureError(f"Data length ('n') should be positive integer, not '{n}'")
-        elif n > CONFIG.TESTCHANNEL_MAX_DATALEN:
-            raise SignatureError(f"Data length ('n') should be no more than {CONFIG.TESTCHANNEL_MAX_DATALEN}")
+        elif n > self.TESTCHANNEL_MAX_DATALEN:
+            raise SignatureError(f"Data length ('n') should be no more than {self.TESTCHANNEL_MAX_DATALEN}")
 
         if data in ('r', 'random'):
             # NOTE: zeros are not allowed => range starts from 1
             checkingData = struct.pack(f'< {n}B', *(randrange(1, 0x100) for _ in range(n)))
         elif not data:
-            checkingData = bytes.fromhex(CONFIG.TESTCHANNEL_DEFAULT_DATABYTE * n)
+            checkingData = bytes.fromhex(self.TESTCHANNEL_DEFAULT_DATABYTE * n)
         else:
             try:
                 dataSampleIterator = cycle(bytes.fromhex(data))
@@ -273,7 +281,7 @@ class Assist:
         # Parse descriptor struct
         try:
             params = struct.unpack('< B B I h I B f',
-                                   reply[sigNameEndIndex + 1:][:CONFIG.BASE_SIGNAL_DESCRIPTOR_SIZE])
+                                   reply[sigNameEndIndex + 1:][:self.BASE_SIGNAL_DESCRIPTOR_SIZE])
         except StructParseError:
             raise DataInvalidError(f"Failed to parse signal #{signalNum} descriptor struct: "
                                    f"[{bytewise(reply[sigNameEndIndex + 1:])}]", data=reply)
@@ -359,7 +367,7 @@ class Assist:
 
         reply = self.transaction(command + commandParams + commandValue)
 
-        if CONFIG.CHECK_DATA: Command.checkEmpty(reply)
+        if self.CHECK_DATA: Command.checkEmpty(reply)
         signal.mode = Signal.Mode(mode)
 
         # Sync signal value
@@ -397,7 +405,7 @@ class Assist:
             except IndexError:
                 raise DataInvalidError('Cannot determine end of string - no null character found', data=reply)
 
-            if CONFIG.CHECK_DATA: Command.checkStrExtra(valueBytes, reply)
+            if self.CHECK_DATA: Command.checkStrExtra(valueBytes, reply)
             sigValue = valueBytes.decode('utf-8', errors='replace')
 
         else:

@@ -5,16 +5,19 @@ from random import randrange
 from typing import Union, Any, Tuple
 
 import progressbar
-from Transceiver import Transceiver, lrc, BadCrcError
+from Transceiver import Transceiver, lrc
+from Transceiver.errors import *
 from Utils import bytewise, Logger
 
-from .config import CONFIG
-from .core import Command, Signal
+from .core import Command, Signal, SignalsTree
 from .errors import *
 
 
 log = Logger('API')
 log.setLevel('SPAM')
+
+
+# TODO: remove Assist class and use module-level functions instead
 
 
 class Assist:
@@ -422,10 +425,12 @@ class Assist:
 
     # TODO: telemetry handling methods
 
-    def simpleScanSignals(self, attempts: int = 2, showProgress: bool = False) -> Tuple[tuple, tuple]:
+    def scanSignals(self, attempts: int = 2, *, tree: bool = True,
+                          showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:
+
         nSignals = self.signalsCount()
-        signals = []  # signal objects acquired with .readSignalDescriptor()
         failed = []  # indexes of signals which descriptor query failed
+
         if showProgress is True:
             progressbarElements = (
                 progressbar.widgets.Bar(marker='█', left='', right='', fill='░'),
@@ -435,18 +440,19 @@ class Assist:
         else:
             progress = iter
 
+        target = SignalsTree() if tree is True else []
+
+        log.info(f"Scanning {nSignals} signals...")
         loggers = None if showProgress is False else 'all'
         with Logger.suppressed(target=loggers, level='WARNING'):
             for signalNum in progress(range(nSignals)):
                 for _ in range(attempts):
                     try:
-                        signals.append(self.readSignalDescriptor(signalNum))
+                        target.append(self.readSignalDescriptor(signalNum))
                         break
-                    except BadAckError:
+                    except (BadAckError, SerialReadTimeoutError):
                         continue
                 else:
                     failed.append(signalNum)
 
-        return tuple(signals), tuple(failed)
-
-    def scanSignals(self): ...  # TODO: scan to .tree
+        return target, tuple(failed)

@@ -143,6 +143,8 @@ def apiTest():
                         with Signal.scanMode:
                             signals, failed = api.scanSignals(tree=createTree, showProgress=True)
 
+                        if createTree is True:
+                            Signal.tree = signals
                         if showOutput:
                             log.info(signals if createTree is True else f"Signals:\n" + formatList(signals))
                         if failed:

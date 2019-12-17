@@ -424,7 +424,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         mode: Mode
         signature: Signature
 
-    # Descriptor-defined parameters (immutable)
+    # Descriptor-defined parameters
     with TAG('params') |const:
         name: Name
         varclass: Class
@@ -579,6 +579,59 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return hash(self.n)
 
 
+class Telemetry(metaclass=Classtools, init=False):
+
+    class Mode(ParamEnum):
+        Reset = 0, 'OFF'
+        Stream = 1, 'RUNNING(stream)'
+        Framed = 2, 'RUNNING(framed)'
+        Buffered = 3, 'RUNNING(buffered)'
+        Run = 3, 'RUNNING(buffered)'
+        Stop = 4, 'STOPPED'
+
+        def __new__(cls, idx: int, state: str):
+            member = object.__new__(cls)
+            member._value_ = idx
+            return member
+
+        def __init__(self, _, state: str):
+            self.state = state
+
+    @unique
+    class Status(ParamFlagEnum):
+        Disabled = None
+        Ok = 1 << 0
+        Overflow = 1 << 1
+        Error1 = 1 << 2
+        Error2 = 1 << 3
+        Error3 = 1 << 4
+        Error4 = 1 << 5
+        Awaiting = 1 << 6
+        Badframe = 1 << 7
+
+    @unique
+    class Attrs(ParamFlagEnum):
+        Streaming = 1 << 0  # continuous transmission of data samples
+        Framing = 1 << 1    # divide data in frames and send it on .readData command
+        Buffering = 1 << 2  # send data on .readData command
+
+    # Telemetry-defined parameters
+    with TAG('variables'):
+        mode: ClassVar[Mode]
+        splitPeriod: ClassVar[int]
+        frameSize: ClassVar[int]
+        status: ClassVar[Status]
+        signals: ClassVar[Sequence[Signal]]
+        data: ClassVar[Sequence[Union[str, int, float, bool]]]
+
+    # Descriptor-defined parameters
+    with TAG('params'):
+        period: ClassVar[int]
+        maxNumSignals: ClassVar[int]
+        maxFrameSize: ClassVar[int]
+        attrs: ClassVar[Attrs]
+
+
 if __name__ == '__main__':
     testingItem = SignalsTree
 
@@ -636,7 +689,7 @@ if __name__ == '__main__':
             for k in range(100):
                 s = Signal(
                         n=k,
-                        name=f"{''.join(sample('ertuopasdfghklxcbnm', randint(2, 8)))}[{k}]".capitalize(),
+                        name=f"{''.join(sample('ertuopasdfghklzxcvbnm', randint(2, 8)))}[{k}]".capitalize(),
                         varclass=Signal.Class(randint(0, 2)),
                         vartype=Signal.Type(randint(0, 7)),
                         attrs=Signal.Attrs(randint(0, 15)) & ~Signal.Attrs.Node,

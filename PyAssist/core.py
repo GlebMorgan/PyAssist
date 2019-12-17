@@ -521,7 +521,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             setattr(new, name, value)
         return new
 
-
     @classproperty
     def attrNamesWidth(cls):
         """ Service property. Computes length (in characters) of all Signal attrs
@@ -540,7 +539,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
                          f"{getattr(self, name, stubs['notAssigned'])}")
         children = f"[{', '.join(getattr(self, 'children'))}]" if hasattr(self, 'children') else stubs['notAssigned']
         lines.append(f"{'children'.rjust(self.attrNamesWidth)} - {children}")
-
         return '\n'.join(lines)
 
     def __str__(self):
@@ -580,10 +578,10 @@ class Telemetry(metaclass=Classtools, init=False):
 
     class Mode(ParamEnum):
         Reset = 0, 'OFF'
-        Stream = 1, 'RUNNING(stream)'
-        Framed = 2, 'RUNNING(framed)'
-        Buffered = 3, 'RUNNING(buffered)'
-        Run = 3, 'RUNNING(buffered)'
+        Stream = 1, 'RUNNING (stream)'
+        Framed = 2, 'RUNNING (framed)'
+        Buffered = 3, 'RUNNING (buffered)'
+        Run = 3, 'RUNNING (buffered)'
         Stop = 4, 'STOPPED'
 
         def __new__(cls, idx: int, state: str):
@@ -597,14 +595,14 @@ class Telemetry(metaclass=Classtools, init=False):
     @unique
     class Status(ParamFlagEnum):
         Disabled = None
-        Ok = 1 << 0
+        OK = 1 << 0
         Overflow = 1 << 1
         Error1 = 1 << 2
         Error2 = 1 << 3
         Error3 = 1 << 4
         Error4 = 1 << 5
-        Awaiting = 1 << 6
-        Badframe = 1 << 7
+        NoData = 1 << 6
+        BadFrame = 1 << 7
 
     @unique
     class Attrs(ParamFlagEnum):

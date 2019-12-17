@@ -6,8 +6,8 @@ from Transceiver.errors import *
 from Utils import bytewise, Logger, formatList
 from Utils.colored_logger import LogRecordFormat, LogStyle, LogDateFormat, Formatters
 
+from . import api
 from .assist_packet_formatter import PacketFormatter
-from .api import Assist
 from .core import Command, Signal
 from .errors import *
 
@@ -63,16 +63,16 @@ def showHelp(item=None):
 
 
 def scandev(start, end):
-    oldTimeout = assist.transceiver.timeout
-    oldDevice = assist.transceiver.deviceAddress
-    assist.transceiver.timeout = 0.1
+    oldTimeout = api.transceiver.timeout
+    oldDevice = api.transceiver.deviceAddress
+    api.transceiver.timeout = 0.1
 
     addr = []
     for i in range(int(start), int(end) + 1):
         log.info(f"Tyr addr: {i}")
         try:
-            assist.transceiver.deviceAddress = i
-            assist.checkChannel()
+            api.transceiver.deviceAddress = i
+            api.checkChannel()
         except SerialReadTimeoutError:
             log.info("Fail\n")
             continue
@@ -81,8 +81,8 @@ def scandev(start, end):
             log.success(f"Reply from address {i}\n")
     log.info(f"Got replies from addresses: {addr}")
 
-    assist.transceiver.timeout = oldTimeout
-    assist.transceiver.deviceAddress = oldDevice
+    api.transceiver.timeout = oldTimeout
+    api.transceiver.deviceAddress = oldDevice
 
 
 def test(*args):
@@ -90,7 +90,7 @@ def test(*args):
         scandev(args[1], args[2])
 
 
-def apiTest(api):
+def apiTest():
 
     with api.transceiver as com:
         env = (globals(), {'api': api, 'com': com})
@@ -171,9 +171,7 @@ def apiTest(api):
 
 if __name__ == '__main__':
 
-    assist = Assist(transceiver=PelengTransceiver(device=12, port='COM2'))
+    api.transceiver = PelengTransceiver(device=12, port='COM2')
 
-    # TEMP: ▼ Remove after api is redesigned to use module-level functions, not Assist methods
-    Signal.api = assist
 
-    apiTest(assist)
+    apiTest()

@@ -9,6 +9,7 @@ from Transceiver import SerialError, Transceiver
 from Utils import Logger, bytewise, Dummy, auto_repr, classproperty, Null, formatDict, SingletonType
 from src.Experiments.attr_tagging_concise import Classtools, TAG, const, lazy
 
+from . import api
 from .config import CONFIG
 from .errors import *
 
@@ -80,8 +81,8 @@ class Command():
 
     def __call__(self, fun):
         @wraps(fun)
-        def wrapper(this, *args, **kwargs):
-            args = (this, self.command, *args)
+        def wrapper(*args, **kwargs):
+            args = (self.command, *args)
 
             # Convert 'CamelCase' to 'Capitalized words sequence'
             commandName = re.sub(self.methodNameRegex, r' \1', fun.__name__).capitalize()
@@ -329,12 +330,12 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             self.enabled = False
 
         def __enter__(self):
-            Signal.api.scanMode(True)
+            api.scanMode(True)
             self.enabled = True
             log.info("Scan mode: on")
 
         def __exit__(self, exc_type, exc_val, exc_tb):
-            Signal.api.scanMode(False)
+            api.scanMode(False)
             self.enabled = False
             log.info("Scan mode: off")
 
@@ -413,7 +414,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
         def __repr__(self): return str(NotImplemented)
 
-    api: Assist
     transceiver: ClassVar[Transceiver]
     scanMode: ClassVar[bool] = ScanModeDescriptor()
     tree: ClassVar[SignalsTree] = SignalsTree()

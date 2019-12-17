@@ -437,15 +437,11 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         factor: float
 
     # Assist-defined parameters
-    with TAG('extra') |const:
+    with TAG('service') |const:
         n: int
         fullname: str  # is not assigned if .parent is not resolved
         children: Optional[Dict[Name, Signal]]  # should be used only when tree is constructed
         descriptor: str = ... |lazy('getDescriptorView')
-
-    # Internal service parameters
-    with TAG('service'):
-        pass
 
     def __init__(self, n: int, name: Name,
                  varclass: Union[Class, int],

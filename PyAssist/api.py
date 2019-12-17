@@ -427,6 +427,12 @@ class Assist:
 
     def scanSignals(self, attempts: int = 2, *, tree: bool = True,
                           showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:
+        """ API: scanSignals(attempts=N, tree=True/False, showProgress=True/False)
+                    Detail: if 'tree' is False, list of signals is returned
+                            if True, new SignalsTree instance is created and returned
+                    Raises: [signalsCount errors]
+                            [readSignalDescriptor errors]
+                """
 
         nSignals = self.signalsCount()
         failed = []  # indexes of signals which descriptor query failed

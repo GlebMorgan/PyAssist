@@ -133,14 +133,16 @@ def apiTest(api):
                         test(*params)
 
                     elif command in ('s', 'scans'):
-                        createTree = bool(params[0]) if len(params) > 0 else False
-                        showOutput = bool(params[1]) if len(params) > 1 else True
-                        if len(params) > 2:
-                            raise CommandError("Too many params - expected 'create tree' and 'show output' flags")
+                        createTree = not 'list' in params
+                        showOutput = not 'silent' in params
+
+                        log.verbose(f'API call: api.scanMode(tree={createTree}, showProgress=True)' +
+                                    (f' <no-output>' if showOutput is False else ''))
                         with Signal.scanMode:
                             signals, failed = api.scanSignals(tree=createTree, showProgress=True)
+
                         if showOutput:
-                            log.info(f"Signals:\n" + formatList(signals))
+                            log.info(signals if createTree is True else f"Signals:\n" + formatList(signals))
                         if failed:
                             log.error("Failed to get descriptors for signals: "
                                       f"[{', '.join('#' + num for num in failed)}]")

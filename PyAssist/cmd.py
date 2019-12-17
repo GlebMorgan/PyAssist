@@ -129,7 +129,7 @@ def apiTest():
                     if command in ('h', 'help'):
                         showHelp(*params)
 
-                    if command in ('t', 'test'):
+                    elif command in ('t', 'test'):
                         test(*params)
 
                     elif command in ('s', 'scans'):

@@ -272,7 +272,7 @@ class SignalsTree:
         else:  # parent is some other signal
             Signal.parent.slot.__set__(signal, self.data[parentNum])
             signal.fullname = f"{signal.parent.fullname}.{name}"
-            if Signal.ASSIGN_NODE is True:
+            if self.ASSIGN_NODE is True:
                 Signal.attrs.slot.__set__(signal.parent, signal.attrs | Signal.Attrs.Node)
 
         signal.parent.children[name] = signal

@@ -48,7 +48,7 @@ def showHelp(item=None):
         # Command is just "help" --> show all command signatures
         log.verbose("Commands API:")
         for apiCommandMethod in apiMethods:
-            log.info(f"{apiCommandMethod.shortcut:>5} - {Command.getCommandApi(apiCommandMethod)}")
+            log.verbose(f"{apiCommandMethod.shortcut:>5} - {Command.getCommandApi(apiCommandMethod)}")
     else:
         # Command contains explicit API command --> show signature of requested command only
         if item in (fun.__name__ for fun in apiMethods):
@@ -93,7 +93,7 @@ def test(*args):
 def apiTest():
 
     with api.transceiver as com:
-        env = (globals(), {'api': api, 'com': com})
+        env = (globals(), {'api': api, 'com': com, 'Signal': Signal})
 
         for n in range(10_000):
             try:

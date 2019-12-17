@@ -30,7 +30,8 @@ log.setLevel('SPAM')
 stubs = dict(
         notAssigned = '<N/A>',
         noNameAttr  = '<NoName>',
-        emptyAttrs  = '<NoAttrs>',
+        noAttrs  = '<NoAttrs>',
+        noSignals = '<NoSignals>',
         rootSignal  = '<Root>',
 )
 
@@ -170,7 +171,7 @@ class ParamEnum(Enum):
 class ParamFlagEnum(ParamEnum, Flag):
     def __str__(self):
         if self.value == 0:
-            return stubs['emptyAttrs']
+            return stubs['noAttrs']
         else:
             return Flag.__str__(self)[self.__class__.__name__.__len__()+1:]
 

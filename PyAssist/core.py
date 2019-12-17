@@ -617,19 +617,73 @@ class Telemetry(metaclass=Classtools, init=False):
 
     # Telemetry-defined parameters
     with TAG('variables'):
-        mode: ClassVar[Mode]
-        splitPeriod: ClassVar[int]
-        frameSize: ClassVar[int]
-        status: ClassVar[Status]
-        signals: ClassVar[Sequence[Signal]]
-        data: ClassVar[Sequence[Union[str, int, float, bool]]]
+        mode: Mode
+        splitPeriod: int
+        frameSize: int
+        status: Status
+        signals: Sequence[Signal]
+        data: Sequence[Union[str, int, float, bool]]  # TODO: Do I need this here?
 
     # Descriptor-defined parameters
-    with TAG('params'):
-        period: ClassVar[int]
-        maxNumSignals: ClassVar[int]
-        maxFrameSize: ClassVar[int]
-        attrs: ClassVar[Attrs]
+    with TAG('params') |const:
+        period: int
+        maxNumSignals: int
+        maxFrameSize: int
+        attrs: Attrs
+
+    with TAG('service'):
+        name: str
+        descriptor: str = ... | lazy('getDescriptorView')
+
+    @classproperty
+    def attrNamesWidth(cls):
+        """ Service property. Computes length (in characters) of all Signal attrs
+                for aligning descriptor view elements
+        """
+        width = max(len(name) for name in cls.__attrs__)
+        setattr(cls, 'attrNamesWidth', width)
+        return width
+
+    @property
+    def frequency(self) -> float:
+        return 100*1_000_000 / self.period
+
+    #service
+    def getDescriptorView(cls):
+        lines = []
+
+        for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
+                     'parent', 'period', 'dimen', 'factor', 'signature'):
+            lines.append(f"{name.rjust(cls.attrNamesWidth)} - "
+                         f"{getattr(cls, name, stubs['notAssigned'])}")
+        children = f"[{', '.join(getattr(cls, 'children'))}]" if hasattr(cls, 'children') else stubs['notAssigned']
+        lines.append(f"{'children'.rjust(cls.attrNamesWidth)} - {children}")
+        return '\n'.join(lines)
+
+        return auto_repr(self, f"is {self.mode.state} [{', '.join(signal.name for signal in self.signals)}] "
+        f"{'status=' + str(self.status) if self.status else ''}, attrs={self.attrs}, "
+        f"period={self.period}{'/' + str(self.splitPeriod) if self.splitPeriod > 1 else ''}")
+
+    def __str__(self):
+        return f"Telemetry: {self.mode.state} <{self.status}> " \
+               f"[{', '.join(signal.name for signal in self.signals)}]"
+
+    def __repr__(self):
+        return auto_repr(self,
+            "{name}: {mode}{status} {{{period} ({freq})}} [{signals}] {frameSize}{attrs}".format(
+                    name = self.name,
+                    mode = self.mode.state,
+                    status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
+                    period = f'{self.period/self.splitPeriod / 100}μs',
+                    freq = f'{1_000_000*100 / self.period}Hz',
+                    signals = {', '.join(s.name for s in self.signals)} if self.signals else stubs['noSignals'],
+                    frameSize = f'{self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
+                    attrs = self.attrs,
+            )
+        )
+
+
+# ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #
 
 
 if __name__ == '__main__':

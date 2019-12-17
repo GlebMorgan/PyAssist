@@ -63,6 +63,8 @@ def showHelp(item=None):
 
 
 def scandev(start, end):
+    """ Send .checkChannel command to all addresses in a given range and log responses """
+
     oldTimeout = api.transceiver.timeout
     oldDevice = api.transceiver.deviceAddress
     api.transceiver.timeout = 0.1

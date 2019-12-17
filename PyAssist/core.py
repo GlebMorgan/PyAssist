@@ -181,9 +181,9 @@ class ParamFlagEnum(ParamEnum, Flag):
         raise NotImplementedError
 
 
-class Root(metaclass=SingletonType):
+class Root():
     """ Idle container class for top-level Signal objects
-        Used in signals tree rendering
+        Used to access those signals, in signals tree rendering
     """
 
     def __init__(self):

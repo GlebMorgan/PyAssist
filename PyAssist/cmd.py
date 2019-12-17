@@ -117,7 +117,9 @@ def apiTest():
                         exec(userinput[1:].strip(), *env)
 
                 elif userinput == 'flush':
+                    pending = com.in_waiting
                     com.reset_input_buffer()
+                    log.verbose(f"Flushed {pending} bytes")
 
                 elif userinput == 'read':
                     reply = com.read(com.in_waiting)

@@ -562,12 +562,16 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return '\n'.join(lines)
 
     def __str__(self):
-        return "{name}={value}".format(
-                name = self.name or stubs['noNameAttr'],
-                value = round(self.value, 3)
-                        if self.vartype == self.Type.Float and self.value is not Null
-                        else self.value
-        )
+        name = self.name or stubs['noNameAttr']
+        if self.value == '':
+            return name
+        elif self.vartype == self.Type.String:
+            value = f"'{self.value}'"
+        elif self.vartype == self.Type.Float and self.value is not Null:
+            value = round(self.value, 3)
+        else:
+            value = self.value
+        return f"{name}={value}"
 
     def __repr__(self):
         return auto_repr(self,

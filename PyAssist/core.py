@@ -33,6 +33,7 @@ stubs = dict(
         noAttrs  = '<NoAttrs>',
         noSignals = '<NoSignals>',
         rootSignal  = '<Root>',
+        emptyTree = '<Empty>'
 )
 
 
@@ -291,6 +292,8 @@ class SignalsTree:
             Raises:
                 RecursionError - signals tree contains cycle references
         """
+
+        if not self.root.children: return stubs['emptyTree']
 
         line, fork, end, void = '│   ', '├── ', '╰── ' if smooth else '└── ', '    '
         lines = []

@@ -443,11 +443,11 @@ class Signal(metaclass=Classtools, slots=True, init=False):
     scanMode: ClassVar[bool] = ScanModeDescriptor()
     tree: ClassVar[SignalsTree] = SignalsTree(Root())
 
-    # Signal-defined parameters
-    with TAG('variables'):
-        value: Union[str, int, float, bool]  # CONSIDER: .value is None
-        mode: Mode
-        signature: Signature
+    # Assist-defined parameters
+    with TAG('service') |const:
+        n: int
+        fullname: str  # is not assigned if .parent is not resolved
+        children: Optional[Dict[Name, Signal]]  # should be used only when tree is constructed
 
     # Descriptor-defined parameters
     with TAG('params') |const:
@@ -460,11 +460,11 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         dimen: Dimen
         factor: float
 
-    # Assist-defined parameters
-    with TAG('service') |const:
-        n: int
-        fullname: str  # is not assigned if .parent is not resolved
-        children: Optional[Dict[Name, Signal]]  # should be used only when tree is constructed
+    # Signal-defined parameters
+    with TAG('variables'):
+        value: Union[str, int, float, bool] = None
+        mode: Mode = Mode.Free
+        signature: Signature = NotImplemented
 
     def __init__(self, n: int, name: Name,
                  varclass: Union[Class, int],
@@ -487,6 +487,9 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         self.dimen = self.Dimen(dimen)
         self.factor = float(factor)
 
+        for name in ('value', 'mode', 'signature'):
+            setattr(self, name, Signal[name].default)
+
         if parent is not None:
             if isinstance(parent, int):
                 self.parent = parent
@@ -496,10 +499,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             else:
                 raise TypeError(f"Invalid 'parent' parameter type: "
                                 f"expected 'Signal', 'Root' or 'int', got {type(parent)}")
-
-        self.value = Null
-        self.mode = self.Mode.Free
-        self.signature = NotImplemented
 
     @classmethod
     def from_struct(cls, n: int, params: Sequence) -> Signal:
@@ -518,12 +517,11 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             try:
                 value = int(params[i]) if name == 'parent' else cls[name].type(params[i])
             except (ValueError, TypeError) as e:
-                raise DataInvalidError(f"Signal #{n} descriptor is invalid - {e.args[0]}")
+                raise DataInvalidError(f"Invalid signal #{n} descriptor parameter '{name}'  - {e.args[0]}")
             setattr(this, name, value)
 
-        this.value = Null
-        this.mode = cls.Mode.Free
-        this.signature = NotImplemented
+        for name in ('value', 'mode', 'signature'):
+            setattr(this, name, cls[name].default)
 
         return this
 
@@ -565,6 +563,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         name = self.name or stubs['noNameAttr']
         if self.value == '':
             return name
+        elif self.value is None:
+            value = stubs['notAssigned']
         elif self.vartype == self.Type.String:
             value = f"'{self.value}'"
         elif self.vartype == self.Type.Float and self.value is not Null:

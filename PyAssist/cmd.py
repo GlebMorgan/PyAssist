@@ -153,7 +153,7 @@ def apiTest():
                             log.info(signals if createTree is True else f"Signals:\n" + formatList(signals))
                         if failed:
                             log.error("Failed to get descriptors for signals: "
-                                      f"[{', '.join('#' + num for num in failed)}]")
+                                      f"[{', '.join(f'#{num}' for num in failed)}]")
 
                     elif command in commands:
                         try:

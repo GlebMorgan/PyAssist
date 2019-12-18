@@ -195,7 +195,6 @@ class SignalsTree:
             <Signal Test = ... at 0x...>
             >>> signals['Test']
             <Signal Test = ... at 0x...>
-
     """
 
     # Automatically add Attrs.Node flag to node signal when constructing a tree
@@ -211,7 +210,7 @@ class SignalsTree:
         raise TypeError(f"Invalid key type - expected 'str' or 'int', got '{key.__class__.__name__}'")
 
     @__getitem__.register(int)
-    def getByIndex(self, key: int) -> Signal:
+    def getByIndex(self, key: int) -> Union[Signal, Signal.Unknown]:
         return self.data[key]
 
     @__getitem__.register(str)
@@ -234,7 +233,11 @@ class SignalsTree:
                 raise KeyError(f"Ambiguous signal name '{key}' - "
                                f"[{', '.join(signal.fullname for signal in matches)}]")
 
-    def append(self, signal: Signal):
+    def append(self, signal: Union[Signal, Signal.Unknown]):
+        if isinstance(signal, Signal.Unknown):
+            self.data.append(signal)
+            self.root.children[signal.name] = signal
+            return
         if not isinstance(signal, Signal):
             raise TypeError(f"Only 'Signal' entries are allowed, got '{signal.__class__.__name__}'")
         if signal.n != len(self.data):
@@ -252,14 +255,13 @@ class SignalsTree:
             self.names[name].append(signal)
 
         parentNum = signal.parent
-
         if parentNum == -1:  # parent is Root
             Signal.parent.slot.__set__(signal, self.root)
             signal.fullname = name
         else:  # parent is some other signal
             Signal.parent.slot.__set__(signal, self.data[parentNum])
             signal.fullname = f"{signal.parent.fullname}.{name}"
-            if self.ASSIGN_NODE is True:
+            if self.ASSIGN_NODE is True and not isinstance(signal.parent, Signal.Unknown):
                 Signal.attrs.slot.__set__(signal.parent, signal.attrs | Signal.Attrs.Node)
 
         signal.parent.children[name] = signal
@@ -307,7 +309,10 @@ class SignalsTree:
 
 
 class Signal(metaclass=Classtools, slots=True, init=False):
-    """ Signal docstring """
+    """ Signal docstring
+        NOTE: if parent of some bundle of signals is <Unknown>,
+              reference to all those signals would be garbage-collected :)
+    """
 
     Name = TypeVar('Name', bound=str)  # Signal name
 

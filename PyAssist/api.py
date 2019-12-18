@@ -494,7 +494,7 @@ def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
     else:
         progress = iter
 
-    target = SignalsTree() if tree is True else []
+    target = SignalsTree(Signal.Root()) if tree is True else []
 
     log.info(f"Scanning {nSignals} signals...")
 
@@ -512,6 +512,7 @@ def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
             target.append(signal)
             break
         else:
+            target.append(Signal.Unknown(signalNum))
             failed.append(signalNum)
 
     return target, tuple(failed)

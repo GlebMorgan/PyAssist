@@ -665,7 +665,7 @@ class Telemetry(metaclass=Classtools, slots=True, init=False):
                     status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
                     period = f'{self.period/self.splitPeriod / 100}μs',
                     freq = f'{1_000_000*100 / self.period}Hz',
-                    signals = {', '.join(s.name for s in self.signals)} if self.signals else stubs['noSignals'],
+                    signals = ', '.join(s.name for s in self.signals) if self.signals else stubs['noSignals'],
                     frameSize = f'{self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
                     attrs = self.attrs,
             )

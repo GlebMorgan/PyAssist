@@ -525,17 +525,15 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @classproperty
     def attrNamesWidth(cls):
-        """ Service property. Computes length (in characters) of all Signal attrs
-                for aligning descriptor view elements
-        """
+        """ Service property. Computes length (in characters) of all Signal attrs """
         width = max(len(name) for name in cls.__attrs__)
         setattr(cls, 'attrNamesWidth', width)
         return width
 
     def format(self) -> str:
         lines = []
-        for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
-                     'parent', 'period', 'dimen', 'factor', 'signature'):
+        for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype',
+                     'attrs', 'parent', 'period', 'dimen', 'factor', 'signature'):
             lines.append(f"{name.rjust(self.attrNamesWidth)} - "
                          f"{getattr(self, name, stubs['notAssigned'])}")
         children = f"[{', '.join(getattr(self, 'children'))}]" if hasattr(self, 'children') else stubs['notAssigned']
@@ -561,7 +559,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
                 factor = f" ×{round(self.factor, 3)}" * (self.factor != 1 and self.value is not Null),
                 dimen = self.dimen.sign * (self.dimen is not self.Dimen.Unitless and self.value is not Null),
                 type = self.vartype,
-                mode = self.mode.name,
+                mode = self.mode,
                 attrs = self.attrs,
             )
         )
@@ -632,9 +630,7 @@ class Telemetry(metaclass=Classtools, slots=True, init=False):
 
     @classproperty
     def attrNamesWidth(cls):
-        """ Service property. Computes length (in characters) of all Signal attrs
-                for aligning descriptor view elements
-        """
+        """ Service property. Computes length (in characters) of all Telemetry attrs """
         width = max(len(name) for name in cls.__attrs__)
         setattr(cls, 'attrNamesWidth', width)
         return width

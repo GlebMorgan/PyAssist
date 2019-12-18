@@ -758,7 +758,7 @@ if __name__ == '__main__':
                 signalsTree.append(sig)
 
         random_signal = signalsTree[randint(0, 99)]
-        print(random_signal.tree)
+        print(signalsTree)
         print()
         print(random_signal)
         print(repr(random_signal))

@@ -33,7 +33,8 @@ stubs = dict(
         noAttrs  = '<NoAttrs>',
         noSignals = '<NoSignals>',
         rootSignal  = '<Root>',
-        emptyTree = '<Empty>'
+        emptyTree = '<Empty>',
+        unknownSignal = '<#{} Unknown>',
 )
 
 
@@ -183,23 +184,6 @@ class ParamFlagEnum(ParamEnum, Flag):
         raise NotImplementedError
 
 
-class Root():
-    """ Idle container class for top-level Signal objects
-        Used to access those signals, in signals tree rendering
-    """
-
-    def __init__(self):
-        self.n = -1
-        self.name: Signal.Name = stubs['rootSignal']
-        self.children: Dict[Signal.Name, Signal] = {}
-
-    def __str__(self):
-        return self.name
-
-    def __repr__(self):
-        return auto_repr(self, 'signal')
-
-
 class SignalsTree:
     """ Container for Signal objects
             Allows for efficient elements access both by integer indexes and string names
@@ -217,9 +201,9 @@ class SignalsTree:
     # Automatically add Attrs.Node flag to node signal when constructing a tree
     ASSIGN_NODE = True
 
-    def __init__(self):
-        self.root = Root()
-        self.data: List[Signal] = []  # (access by index)
+    def __init__(self, root=None):
+        self.root = root if root is not None else Signal.Root()
+        self.data: List[Union[Signal, Signal.Unknown]] = []  # (access by index)
         self.names: Dict[Signal.Name, Union[Signal, List[Signal]]] = {}  # (access by name)
 
     @singledispatchmethod
@@ -327,6 +311,41 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     Name = TypeVar('Name', bound=str)  # Signal name
 
+    class Root():
+        """ Idle container class for top-level Signal objects
+            Used to access those signals, in signals tree rendering
+        """
+
+        def __init__(self):
+            self.n = -1
+            self.name: Signal.Name = stubs['rootSignal']
+            self.children: Dict[Signal.Name, Signal] = {}
+
+        def __str__(self):
+            return self.name
+
+        def __repr__(self):
+            return auto_repr(self, 'signal')
+
+    class Unknown:
+        """ Idle placeholder class to represent unknown signal """
+
+        __slots__ = 'n', 'name', 'fullname', 'children', 'parent'
+        def __init__(self, n: int):
+            self.n = n
+            self.name = stubs['unknownSignal'].format(n)
+            self.fullname = self.name
+            self.children = {}
+
+        def __str__(self):
+            return self.name
+
+        def __repr__(self):
+            return auto_repr(self, 'signal')
+
+        def __hash__(self):
+            return hash(self.n)
+
     class ScanModeDescriptor:
         """ Scan mode flag and context manager to enable scanMode inside its body """
 
@@ -346,9 +365,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         def __get__(self, instance, owner):
             if instance is None: return self
             return self.enabled
-
-        def test(self): pass
-
 
     @unique
     class Mode(ParamEnum):
@@ -420,7 +436,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     transceiver: ClassVar[Transceiver]
     scanMode: ClassVar[bool] = ScanModeDescriptor()
-    tree: ClassVar[SignalsTree] = SignalsTree()
+    tree: ClassVar[SignalsTree] = SignalsTree(Root())
 
     # Signal-defined parameters
     with TAG('variables'):
@@ -469,7 +485,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         if parent is not None:
             if isinstance(parent, int):
                 self.parent = parent
-            elif isinstance(parent, (Signal, Root)):
+            elif isinstance(parent, (Signal, Signal.Root)):
                 self.parent = parent
                 self.fullname = f"{self.parent.name}.{name}"
             else:

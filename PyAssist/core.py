@@ -441,7 +441,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         n: int
         fullname: str  # is not assigned if .parent is not resolved
         children: Optional[Dict[Name, Signal]]  # should be used only when tree is constructed
-        descriptor: str = ... |lazy('getDescriptorView')
 
     def __init__(self, n: int, name: Name,
                  varclass: Union[Class, int],
@@ -530,8 +529,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         setattr(cls, 'attrNamesWidth', width)
         return width
 
-    # service
-    def getDescriptorView(self):
+    def format(self) -> str:
         lines = []
         for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
                      'parent', 'period', 'dimen', 'factor', 'signature'):
@@ -628,7 +626,6 @@ class Telemetry(metaclass=Classtools, init=False):
 
     with TAG('service'):
         name: str
-        descriptor: str = ... | lazy('getDescriptorView')
 
     @classproperty
     def attrNamesWidth(cls):
@@ -643,8 +640,7 @@ class Telemetry(metaclass=Classtools, init=False):
     def frequency(self) -> float:
         return 100*1_000_000 / self.period
 
-    #service
-    def getDescriptorView(cls):
+    def format(self) -> str:
         lines = []
 
         for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
@@ -724,7 +720,7 @@ if __name__ == '__main__':
                 {name: attr._annotation_ for name, attr in SampleSignal.__attrs__.items()}
         ), '\n')
         # print('iter(sig): ', tuple(SampleSignal), '\n')
-        print('SampleSignal.descriptor:', SampleSignal.descriptor, '\n', sep='\n')
+        print('SampleSignal.format():', SampleSignal.format(), '\n', sep='\n')
         # CONSIDER: ▼ signal object name and signal.name may not match...
         print('child access:\n', SampleSignal.SampleChild, '\n')
 
@@ -764,4 +760,4 @@ if __name__ == '__main__':
         print()
         print(random_signal)
         print(repr(random_signal))
-        print(random_signal.descriptor)
+        print(random_signal.format())

@@ -296,7 +296,7 @@ def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
     if signal.varclass is not Signal.Class.Std:
         raise NotImplementedError("Complex type class signals are not supported")
 
-    log.verbose('\n'+signal.descriptor)
+    log.verbose('\n'+signal.format())
 
     return signal
 

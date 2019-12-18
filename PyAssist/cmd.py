@@ -139,11 +139,13 @@ def apiTest():
                     elif command in ('s', 'scans'):
                         createTree = not 'list' in params
                         showOutput = not 'silent' in params
+                        init = 'init' in params
 
                         log.verbose(f'API call: api.scanMode(tree={createTree}, showProgress=True)' +
                                     (f' <no-output>' if showOutput is False else ''))
-                        with Signal.scanMode:
-                            signals, failed = api.scanSignals(tree=createTree, showProgress=True)
+
+                        with Signal.scanMode, Logger.suppressed('all', 'WARNING'):
+                            signals, failed = api.scanSignals(tree=createTree, init=init, showProgress=True)
 
                         if createTree is True:
                             Signal.tree = signals

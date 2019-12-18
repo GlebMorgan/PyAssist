@@ -463,11 +463,21 @@ def readTelemetryDescriptor(command):
 
 # TODO: warn if frameSize and similar telemetry parameters would exceed maximums set by tm descriptor
 
-def scanSignals(attempts: int = 2, *, tree: bool = True,
+def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
                       showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:
     """ API: scanSignals(attempts=N, tree=True/False, showProgress=True/False)
-                Detail: if 'tree' is False, list of signals is returned
-                        if True, new SignalsTree instance is created and returned
+                Detail:
+                    'tree' - signals collection output format:
+                        True -> SignalsTree()
+                        False -> list of signals
+                    'init' - signal.value initialization:
+                        True -> readSignal() is called after each successful descriptor query
+                        False -> signal is left with .value uninitialized (N/A)
+                    'showProgress' - display ascii progressbar while performing scan
+                Return:
+                    2-element tuple:
+                        • list of signals / signals tree
+                        • tuple of signal indexes which failed to be acquired
                 Raises: [signalsCount errors]
                         [readSignalDescriptor errors]
             """
@@ -487,16 +497,21 @@ def scanSignals(attempts: int = 2, *, tree: bool = True,
     target = SignalsTree() if tree is True else []
 
     log.info(f"Scanning {nSignals} signals...")
-    loggers = None if showProgress is False else 'all'
-    with Logger.suppressed(target=loggers, level='WARNING'):
-        for signalNum in progress(range(nSignals)):
-            for _ in range(attempts):
+
+    for signalNum in progress(range(nSignals)):
+        for _ in range(attempts):
+            try:
+                signal = readSignalDescriptor(signalNum)
+            except (BadAckError, SerialReadTimeoutError):
+                continue
+            if init is True:
                 try:
-                    target.append(readSignalDescriptor(signalNum))
-                    break
+                    signal.value = readSignal(signal)
                 except (BadAckError, SerialReadTimeoutError):
                     continue
-            else:
-                failed.append(signalNum)
+            target.append(signal)
+            break
+        else:
+            failed.append(signalNum)
 
     return target, tuple(failed)

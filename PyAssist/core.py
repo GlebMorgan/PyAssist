@@ -1,7 +1,7 @@
 from __future__ import annotations as _
 import re
 from enum import Enum, Flag, unique
-from functools import wraps, partial
+from functools import wraps, partial, partialmethod
 from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, List, Dict, TypeVar
 
 from CPython.Lib.functools import singledispatchmethod
@@ -636,11 +636,11 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     # Assist-defined parameters
     with TAG('service'):
-        name: str
+        name: str  # TODO: could be None
 
     # Descriptor-defined parameters
     with TAG('params') |const:
-        period: int
+        minPeriod: float #μs
         maxNumSignals: int
         maxFrameSize: int
         attrs: Attrs
@@ -663,12 +663,17 @@ class Telemetry(metaclass=Classtools, slots=True):
 
         this = cls.__new__(cls)
         this.name = device
+
         for i, name in enumerate(cls.__tags__['params']):
             try:
                 value = cls[name].type(params[i])
             except (ValueError, TypeError) as e:
                 raise DataInvalidError(f"Invalid telemetry descriptor parameter '{name}' - {e.args[0]}")
-            setattr(this, name, value)
+            setattr(this, name, value if name != 'minPeriod' else value/100)
+
+        for name in Telemetry.__tags__['variables']:
+            setattr(this, name, Telemetry[name].default)
+
         return this
 
     @classproperty
@@ -679,13 +684,17 @@ class Telemetry(metaclass=Classtools, slots=True):
         return width
 
     @property
-    def frequency(self) -> float:
-        return 100*1_000_000 / self.period
+    def frequency(self) -> float: #Hz
+        return 1_000_000 / (self.minPeriod * self.splitPeriod) if self.splitPeriod else Null
+
+    @property
+    def period(self) -> float: #μs
+        return self.minPeriod * self.splitPeriod if self.splitPeriod else Null
 
     def format(self) -> str:
         lines = []
 
-        for name in ('name', 'mode', 'status', 'period', 'splitPeriod','frequency',
+        for name in ('name', 'mode', 'status', 'minPeriod', 'splitPeriod', 'frequency',
                      'attrs', 'frameSize', 'maxFrameSize', 'maxNumSignals'):
             lines.append(f"{name.rjust(self.attrNamesWidth)} - "
                          f"{getattr(self, name, stubs['notAssigned'])}")
@@ -698,17 +707,38 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     def __repr__(self):
         return auto_repr(self,
-            "{name}: {mode}{status} {{{period} ({freq})}} [{signals}] {frameSize}{attrs}".format(
-                    name = self.name,
-                    mode = self.mode.state,
-                    status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
-                    period = f'{self.period/self.splitPeriod / 100}μs',
-                    freq = f'{1_000_000*100 / self.period}Hz',
-                    signals = ', '.join(s.name for s in self.signals) if self.signals else stubs['noSignals'],
-                    frameSize = f'{self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
-                    attrs = self.attrs,
+            "'{name}': {mode}{status} {perf}{frameSize}{attrs} [{signals}]".format(
+                name = self.name,
+                mode = self.mode.state,
+                status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
+                perf = f'({self.formatPeriod(self.period)}, {self.formatFreq(self.frequency)}) '
+                       if self.splitPeriod else '',
+                frameSize = f'{self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
+                attrs = self.attrs,
+                signals=', '.join(s.name for s in self.signals) if self.signals else stubs['noSignals'],
             )
         )
+
+    @staticmethod
+    def formatValue(value: Union[int, float], digits=2, *, baseQuantity: str) -> str:
+        multipliers = 'μ', 'm', '', 'K', 'M', 'G'
+        try:
+            base = multipliers.index(baseQuantity[0])
+        except ValueError:
+            base = 2  # index of an empty multiplier
+
+        if value > 1_000_000:
+            return f'{round(value / 1_000_000_000, digits)}{multipliers[base+3]}{baseQuantity[1:]}'
+        if value > 1_000_000:
+            return f'{round(value / 1_000_000, digits)}{multipliers[base+2]}{baseQuantity[1:]}'
+        if value > 1000:
+            return f'{round(value / 1_000, digits)}{multipliers[base+1]}{baseQuantity[1:]}'
+        else:
+            return f'{round(value, digits)}{baseQuantity}'
+
+    formatFreq = partialmethod(formatValue, baseQuantity='Hz')
+
+    formatPeriod = partialmethod(formatValue, baseQuantity='μs')
 
 
 # ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #

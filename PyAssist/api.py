@@ -9,7 +9,7 @@ from Transceiver import Transceiver, lrc
 from Transceiver.errors import *
 from Utils import bytewise, Logger, flag
 
-from .core import Command, Signal, SignalsTree
+from .core import Command, Signal, SignalsTree, Telemetry
 from .errors import *
 
 
@@ -425,8 +425,11 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
     return sigValue
 
 @Command(command='04 01', shortcut='rtd', required=True, expReply=12, category=Command.Type.TELE)
-def readTelemetryDescriptor(command):
+def readTelemetryDescriptor(command, device: str):
     """ API: readTelemetryDescriptor() """
+
+    if not isinstance(device, str):
+        raise TypeError(f"Invalid 'device' argument - expected 'str', got {device.__class__.__name__}")
 
     reply = transaction(command)
 
@@ -436,28 +439,16 @@ def readTelemetryDescriptor(command):
     except StructParseError:
         raise DataInvalidError(f"Failed to parse telemetry descriptor: [{bytewise(reply)}]", data=reply)
 
+    log.debug(f"Raw '{device}' telemetry struct: {params}")
+
     if (flag(params[3], 0) == 1): raise NotImplementedError("Stream transmission mode is not supported")
     if (flag(params[3], 1) == 1): raise NotImplementedError("Data framing is not supported")
 
-    #TODO: move logging to self.Telemetry.showTeleDescriptor() ▼
-    paramNames = ('Period', 'SignalsCount', 'FrameSize', 'Attrs')
-    paramNamesMaxWidth = max(len(name) for name in paramNames)
-    log.info(f"Telemetry descriptor:")
-    for parNum, parName in enumerate(paramNames):
-        comment = ""
-        if(parName == 'Attrs'):
-            # attrs as flags sequence ▼
-            log.info(f"""{parName.rjust(paramNamesMaxWidth)} : {" ".join(f"{params[parNum]:03b}")}""")
-            # attrs as list (parsed) ▼
-            for nAttr, attrName in enumerate(("Streaming", "Framing", "Buffering")):
-                log.info(f"{attrName.rjust(paramNamesMaxWidth+9)} = "
-                         f"{flag(params[3], nAttr)}")
-            continue
-        if (parName == 'Period'): comment = f" ({1/(params[parNum]/100/1_000_000)} Hz)"
-        log.info(f"{parName.rjust(paramNamesMaxWidth)} : {params[parNum]}{comment}")
+    tm = Telemetry.from_struct(device, params)
 
-    #TODO: return self.Telemetry() object instead ▼
-    return {parName: par for parName, par in zip(paramNames, params)}
+    log.verbose('\n' + tm.format())
+
+    return tm
 
 # TODO: telemetry handling methods
 

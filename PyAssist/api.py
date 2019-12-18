@@ -502,13 +502,10 @@ def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
         for _ in range(attempts):
             try:
                 signal = readSignalDescriptor(signalNum)
-            except (BadAckError, SerialReadTimeoutError):
-                continue
-            if init is True:
-                try:
+                if init is True:
                     signal.value = readSignal(signal)
-                except (BadAckError, SerialReadTimeoutError):
-                    continue
+            except (BadAckError, SerialError):
+                continue
             target.append(signal)
             break
         else:

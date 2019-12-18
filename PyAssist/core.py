@@ -598,7 +598,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return hash(self.n)
 
 
-class Telemetry(metaclass=Classtools, slots=True, init=False):
+class Telemetry(metaclass=Classtools, slots=True):
 
     class Mode(ParamEnum):
         Reset = 0, 'OFF'
@@ -634,14 +634,9 @@ class Telemetry(metaclass=Classtools, slots=True, init=False):
         Framing = 1 << 1    # divide data in frames and send it on .readData command
         Buffering = 1 << 2  # send data on .readData command
 
-    # Telemetry-defined parameters
-    with TAG('variables'):
-        mode: Mode
-        splitPeriod: int
-        frameSize: int
-        status: Status
-        signals: Sequence[Signal]
-        data: Sequence[Union[str, int, float, bool]]  # TODO: Do I need this here?
+    # Assist-defined parameters
+    with TAG('service'):
+        name: str
 
     # Descriptor-defined parameters
     with TAG('params') |const:
@@ -650,8 +645,31 @@ class Telemetry(metaclass=Classtools, slots=True, init=False):
         maxFrameSize: int
         attrs: Attrs
 
-    with TAG('service'):
-        name: str
+    # Telemetry-defined parameters
+    with TAG('variables'):
+        splitPeriod: int = Null
+        frameSize: int = Null
+        mode: Mode = Mode.Reset
+        status: Status = Status.Disabled
+        signals: Sequence[Signal] = []
+        data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
+
+    @classmethod
+    def from_struct(cls, device: str, params: Sequence) -> Telemetry:
+        """ Create Telemetry object and initialize it with `params` arguments
+            Usage:
+            >>> tm = Telemetry.from_struct(device_name, descriptor_params))
+        """
+
+        this = cls.__new__(cls)
+        this.name = device
+        for i, name in enumerate(cls.__tags__['params']):
+            try:
+                value = cls[name].type(params[i])
+            except (ValueError, TypeError) as e:
+                raise DataInvalidError(f"Invalid telemetry descriptor parameter '{name}' - {e.args[0]}")
+            setattr(this, name, value)
+        return this
 
     @classproperty
     def attrNamesWidth(cls):

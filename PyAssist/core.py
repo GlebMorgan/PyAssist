@@ -727,33 +727,37 @@ if __name__ == '__main__':
         from Utils import Timer
         from random import choice, sample, randint, random
 
+        maxDepth = 5
+        signalsTree = SignalsTree()
+
         with Timer("Generate 100 signals"):
-            signals = SignalsTree()
             for k in range(100):
-                s = Signal(
+                name = ''.join(sample('ertuopasdfghklzxcvbnm', randint(2, 8)))
+                potentialParents = (s for s in signalsTree if len(s.fullname.split('.')) < maxDepth)
+                sig = Signal(
                         n=k,
-                        name=f"{''.join(sample('ertuopasdfghklzxcvbnm', randint(2, 8)))}[{k}]".capitalize(),
+                        name=f"{name}[{k}]".capitalize(),
                         varclass=Signal.Class(randint(0, 2)),
                         vartype=Signal.Type(randint(0, 7)),
                         attrs=Signal.Attrs(randint(0, 15)) & ~Signal.Attrs.Node,
-                        parent=choice((*(s for s in signals if len(s.fullname.split('.')) < 5), Signal.tree.root)).n,
+                        parent=choice((*potentialParents, Signal.tree.root)).n,
                         period=randint(10, 1000) * 10,
                         dimen=Signal.Dimen(randint(0, 9)),
                         factor=choice((1, random() * 10)),
                 )
-                if s.vartype.pytype == float:
-                    s.value = choice((Null, 1 / 3, 0.001, 273549.9826543, 0.0000000001, 1.0))
-                elif s.vartype.pytype == int:
-                    s.value = choice((Null, 1, 0, 1_000_000, 28))
-                elif s.vartype.pytype == bool:
-                    s.value = choice((Null, True, False))
-                elif s.vartype.pytype is str:
-                    s.value = 'SomeString'
+                if sig.vartype.pytype == float:
+                    sig.value = choice((Null, 1 / 3, 0.001, 273549.9826543, 0.0000000001, 1.0))
+                elif sig.vartype.pytype == int:
+                    sig.value = choice((Null, 1, 0, 1_000_000, 28))
+                elif sig.vartype.pytype == bool:
+                    sig.value = choice((Null, True, False))
+                elif sig.vartype.pytype is str:
+                    sig.value = 'SomeString'
                 else:
                     assert True, "s.vartype is invalid type"
-                signals.append(s)
+                signalsTree.append(sig)
 
-        random_signal = signals[randint(0, 99)]
+        random_signal = signalsTree[randint(0, 99)]
         print(random_signal.tree)
         print()
         print(random_signal)

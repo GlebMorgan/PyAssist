@@ -646,21 +646,16 @@ class Telemetry(metaclass=Classtools, slots=True, init=False):
     def format(self) -> str:
         lines = []
 
-        for name in ('n', 'name', 'fullname', 'value', 'mode', 'varclass', 'vartype', 'attrs',
-                     'parent', 'period', 'dimen', 'factor', 'signature'):
-            lines.append(f"{name.rjust(cls.attrNamesWidth)} - "
-                         f"{getattr(cls, name, stubs['notAssigned'])}")
-        children = f"[{', '.join(getattr(cls, 'children'))}]" if hasattr(cls, 'children') else stubs['notAssigned']
-        lines.append(f"{'children'.rjust(cls.attrNamesWidth)} - {children}")
+        for name in ('name', 'mode', 'status', 'period', 'splitPeriod','frequency',
+                     'attrs', 'frameSize', 'maxFrameSize', 'maxNumSignals'):
+            lines.append(f"{name.rjust(self.attrNamesWidth)} - "
+                         f"{getattr(self, name, stubs['notAssigned'])}")
+        signals = (signal.name for signal in self.signals)
+        lines.append(f"{'signals'.rjust(self.attrNamesWidth)} - [{', '.join(signals)}]")
         return '\n'.join(lines)
 
-        return auto_repr(self, f"is {self.mode.state} [{', '.join(signal.name for signal in self.signals)}] "
-        f"{'status=' + str(self.status) if self.status else ''}, attrs={self.attrs}, "
-        f"period={self.period}{'/' + str(self.splitPeriod) if self.splitPeriod > 1 else ''}")
-
     def __str__(self):
-        return f"Telemetry: {self.mode.state} <{self.status}> " \
-               f"[{', '.join(signal.name for signal in self.signals)}]"
+        return f"Telemetry '{self.name}': {self.mode.state} <{self.status}> [{len(self.signals)}]"
 
     def __repr__(self):
         return auto_repr(self,

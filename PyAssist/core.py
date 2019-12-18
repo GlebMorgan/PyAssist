@@ -575,7 +575,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return hash(self.n)
 
 
-class Telemetry(metaclass=Classtools, init=False):
+class Telemetry(metaclass=Classtools, slots=True, init=False):
 
     class Mode(ParamEnum):
         Reset = 0, 'OFF'

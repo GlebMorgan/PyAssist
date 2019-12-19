@@ -5,7 +5,7 @@ from random import randrange
 from typing import Union, Any, Tuple
 
 import progressbar
-from Transceiver import Transceiver, lrc
+from Transceiver import lrc
 from Transceiver.errors import *
 from Utils import bytewise, Logger, flag
 
@@ -50,7 +50,7 @@ class TransceiverPlaceholder:
 transceiver = TransceiverPlaceholder()
 
 
-def _convertSignal_(signal: Union[int, Signal]):
+def _ensureSignal_(signal: Union[int, Signal]):
     """ Check 'signal' argument to be Signal() object or convert
             signal number to Signal() by performing readSignalDescriptor() transaction
     """
@@ -61,6 +61,13 @@ def _convertSignal_(signal: Union[int, Signal]):
         raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
                              f"got '{signal.__class__.__name__}'")
     return signal
+
+
+def _ensureTelemetry_(tm: Telemetry):
+    tm = tm or Telemetry.active
+    if tm is None:
+        raise RuntimeError("Missing active telemetry object")
+    return tm
 
 
 def transaction(data: bytes) -> bytes:
@@ -359,7 +366,7 @@ def manageSignal(signal: Union[int, Signal], value: Any = None,
     """
 
     # Check 'signal' argument
-    signal = _convertSignal_(signal)
+    signal = _ensureSignal_(signal)
     if signal.vartype == Signal.Type.String:
         raise NotImplementedError(f"Cannot assign value to string-type signal "
                                   "(for what on Earth reason do you wanna do that btw???)")
@@ -425,7 +432,7 @@ def readSignal(signal: Union[int, Signal]) -> Any:
                 DataInvalidError - reply contains extra data [configurable]
     """
 
-    signal = _convertSignal_(signal)
+    signal = _ensureSignal_(signal)
 
     reply = transaction(readSignal.command + struct.pack('< H', signal.n))
 
@@ -479,12 +486,14 @@ def readTelemetryDescriptor(device: str = None) -> Telemetry:
 
 
 @Command(command='04 02', shortcut='st', required=True, expReply=False, category=Command.Type.TELE)
-def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None, frameSize: int = None):
+def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
+                 frameSize: int = None, *, tm: Telemetry = None):
     """ API: setTelemetry(mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode,
                          [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
-        Details: if Telemetry.active is None, readTelemetryDescriptor() will be called
-                     via Telemetry.init() to acquire telemetry object
+        Raises: RuntimeError - Telemetry.active is None and additional 'tm' argument is not provided
     """
+
+    tm = _ensureTelemetry_(tm)
 
     # Check 'mode' argument
     Modes = Telemetry.Mode
@@ -513,7 +522,6 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None, fra
             raise ValueError(f"Invalid frequency divider argument - expected integer > 0, got '{divider}'")
 
         # Check 'frameSize' argument
-        tm = Telemetry.active or Telemetry.init()
         if Telemetry.Attrs.Framing in tm.attrs:
             if frameSize is None:
                 log.warning(f"Frame size is not provided, using maximum value - {tm.maxFrameSize}")
@@ -526,35 +534,34 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None, fra
 
     if CHECK_DATA: Command.checkEmpty(reply)
 
+    tm.mode = mode
+    if divider: tm.divider = divider
+    if frameSize: tm.frameSize = frameSize
+
 
 @Command(command='04 03', shortcut='as', required=True, expReply=NotImplemented, category=Command.Type.TELE)
-def addSignal(tm: Telemetry, signal: Union[int, Signal]):
-    """ API: addSignal(tm=Telemetry(), signal=Signal()/<signal number>) """
+def addSignal(signal: Union[int, Signal], *, tm: Telemetry = None):
+    """ API: addSignal(signal=Signal()/<signal number>) """
 
-    signal = _convertSignal_(signal)
+    tm = _ensureTelemetry_(tm)
+
+    if len(tm.signals) == tm.maxNumSignals:
+        raise RuntimeError(f"Cannot add signal - maximum of {tm.maxNumSignals} signals is reached ")
+
+    signal = _ensureSignal_(signal)
     reply = transaction(addSignal.command + struct.pack('< H', signal.n))
 
     if CHECK_DATA: Command.checkEmpty(reply)
 
+    tm.signals.append(signal)
+
 
 @Command(command='04 04', shortcut='rt', required=True, expReply=NotImplemented, category=Command.Type.TELE)
-def readTelemetry(command, replyDataLen):
-    """ API: TODO """
+def readTelemetry():
+    """ API: readTelemetry() """
 
-    reply = transaction(command, replyDataLen)
-    if (not reply): raise DataInvalidError("Empty data") #TODO: what to do if reply is empty? ...
+    return transaction(readTelemetry.command)
 
-    print(bytewise(reply))
-
-    return NotImplemented
-
-
-
-
-
-# TODO: telemetry handling methods
-
-# TODO: warn if frameSize and similar telemetry parameters would exceed maximums set by tm descriptor
 
 def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
                 showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:

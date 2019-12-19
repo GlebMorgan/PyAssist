@@ -228,7 +228,7 @@ def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
     if n is None:
         n = TESTCHANNEL_DEFAULT_DATALEN
     elif not isinstance(n, int) or n < 0:
-        raise SignatureError(f"Data length ('n') should be positive integer, not '{n}'")
+        raise SignatureError(f"Invalid data length ('n') - expected positive integer, got '{n}'")
     elif n > TESTCHANNEL_MAX_DATALEN:
         raise SignatureError(f"Data length ('n') should be no more than {TESTCHANNEL_MAX_DATALEN}")
 
@@ -285,7 +285,7 @@ def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
     """
 
     if not isinstance(signalNum, int) or signalNum < 0:
-        raise SignatureError(f"Signal number should be positive integer, not '{signalNum}'")
+        raise SignatureError(f"Invalid signal number - expected positive integer, got '{signalNum}'")
 
     reply = transaction(command + struct.pack('< H', signalNum))
 

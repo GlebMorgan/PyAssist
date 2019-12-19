@@ -37,6 +37,20 @@ class TransceiverPlaceholder:
 
 transceiver = TransceiverPlaceholder()
 
+
+def _convertSignal_(signal: Union[int, Signal]):
+    """ Check 'signal' argument to be Signal() object or convert
+            signal number to Signal() by performing readSignalDescriptor() transaction
+    """
+
+    if isinstance(signal, int):
+        signal = readSignalDescriptor(signal)
+    elif not isinstance(signal, Signal):
+        raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
+                             f"got '{signal.__class__.__name__}'")
+    return signal
+
+
 def transaction(data: bytes) -> bytes:
     """ Perform basic DSP transaction:
             1) add LRC byte to 'data'
@@ -325,11 +339,7 @@ def manageSignal(command: bytes, signal: Union[int, Signal],
     """
 
     # Check 'signal' argument
-    if isinstance(signal, int):
-        signal = readSignalDescriptor(signal)
-    elif not isinstance(signal, Signal):
-        raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
-                             f"got '{signal.__class__.__name__}'")
+    signal = _convertSignal_(signal)
     if signal.vartype == Signal.Type.String:
         raise NotImplementedError(f"Cannot assign value to string-type signal "
                                   "(for what on Earth reason do you wanna do that btw???)")
@@ -395,11 +405,7 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
                 DataInvalidError - reply contains extra data [configurable]
     """
 
-    if isinstance(signal, int):
-        signal = readSignalDescriptor(signal)
-    elif not isinstance(signal, Signal):
-        raise SignatureError(f"Invalid 'signal' argument - expected 'Signal' or 'int', "
-                             f"got '{signal.__class__.__name__}'")
+    signal = _convertSignal_(signal)
 
     reply = transaction(command + struct.pack('< H', signal.n))
 

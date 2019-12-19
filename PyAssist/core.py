@@ -2,6 +2,7 @@ from __future__ import annotations as _
 import re
 from enum import Enum, Flag, unique
 from functools import wraps, partial, partialmethod
+from types import MethodType
 from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, List, Dict, TypeVar
 
 from CPython.Lib.functools import singledispatchmethod
@@ -600,6 +601,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
 class Telemetry(metaclass=Classtools, slots=True):
 
+    # CONSIDER: Telemetry() will return active tm object
+
     class Mode(ParamEnum):
         Reset = 0, 'OFF'
         Stream = 1, 'RUNNING (stream)'
@@ -737,9 +740,9 @@ class Telemetry(metaclass=Classtools, slots=True):
         else:
             return f'{round(value, digits)}{baseQuantity}'
 
-    formatFreq = partialmethod(formatValue, baseQuantity='Hz')
+    formatFreq: MethodType = partialmethod(formatValue, baseQuantity='Hz')
 
-    formatPeriod = partialmethod(formatValue, baseQuantity='μs')
+    formatPeriod: MethodType = partialmethod(formatValue, baseQuantity='μs')
 
 
 # ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #

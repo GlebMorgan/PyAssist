@@ -86,7 +86,6 @@ class Command():
     def __call__(self, fun):
         @wraps(fun)
         def wrapper(*args, **kwargs):
-            args = (self.command, *args)
 
             # Convert 'CamelCase' to 'Capitalized words sequence'
             commandName = re.sub(self.methodNameRegex, r' \1', fun.__name__).capitalize()

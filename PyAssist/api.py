@@ -103,7 +103,7 @@ def sendCommand(command: str, data: str = '') -> bytes:
 
 
 @Command(command='01 01', shortcut='chch', required=True, expReply=8, category=Command.Type.UTIL)
-def checkChannel(command: bytes, data: str = None) -> bytes:
+def checkChannel(data: str = None) -> bytes:
     """ API: checkChannel([data='XX XX ... XX'/'random'])
         Return: 8 bytes of test data received from device
         Raises: [SerialError] - transceiver exception
@@ -125,7 +125,7 @@ def checkChannel(command: bytes, data: str = None) -> bytes:
         if len(checkingData) != 8:
             raise SignatureError("Data length should be 8 bytes")
 
-    reply = transaction(command + checkingData)
+    reply = transaction(checkChannel.command + checkingData)
 
     if (reply != checkingData):
         raise DataInvalidError(f"Invalid reply - expected [{bytewise(checkingData)}], "
@@ -134,7 +134,7 @@ def checkChannel(command: bytes, data: str = None) -> bytes:
 
 
 @Command(command='01 02', shortcut='r', required=False, expReply=False, category=Command.Type.UTIL)
-def reset(command: bytes):
+def reset():
     """ API: reset()
         Return: None
         Raises: [SerialError] - transceiver exception
@@ -143,12 +143,12 @@ def reset(command: bytes):
                 DataInvalidError - reply contains extra data [configurable]
     """
 
-    reply = transaction(command)
+    reply = transaction(reset.command)
     if CHECK_DATA: Command.checkEmpty(reply)
 
 
 @Command(command='01 03', shortcut='i', required=True, expReply=True, category=Command.Type.UTIL)
-def deviceInfo(command: bytes) -> str:
+def deviceInfo() -> str:
     """ API: deviceInfo()
         Return: Device info string
         Raises: [SerialError] - transceiver exception
@@ -158,7 +158,7 @@ def deviceInfo(command: bytes) -> str:
                 DataInvalidError - no zero byte found in reply string
     """
 
-    reply = transaction(command)
+    reply = transaction(deviceInfo.command)
 
     try:
         infoBytes = reply.split(b'\x00', 1)[0]
@@ -171,7 +171,7 @@ def deviceInfo(command: bytes) -> str:
 
 
 @Command(command='01 04', shortcut='sm', required=True, expReply=False, category=Command.Type.UTIL)
-def scanMode(command: bytes, enable: bool):
+def scanMode(enable: bool):
     """ API: scanMode(True/False)
         Return: None
         Raises: [SerialError] - transceiver exception
@@ -185,13 +185,13 @@ def scanMode(command: bytes, enable: bool):
     elif enable in (False, 0, 'off'): mode = b'\x00'
     else: raise SignatureError(f"Invalid mode - expected True/False, got {enable}")
 
-    reply = transaction(command + mode)
+    reply = transaction(scanMode.command + mode)
 
     if CHECK_DATA: Command.checkEmpty(reply)
 
 
 @Command(command='01 05', shortcut='sft', required=False, expReply=True, category=Command.Type.UTIL)
-def selftest(command: bytes) -> str:
+def selftest() -> str:
     """ API: selftest()
         Return: Selftest result string
         Raises: [SerialError] - transceiver exception
@@ -204,7 +204,7 @@ def selftest(command: bytes) -> str:
     savedTimeout = transceiver.timeout
     transceiver.timeout = SELFTEST_TIMEOUT_SEC
 
-    reply = transaction(command)
+    reply = transaction(selftest.command)
 
     try:
         selftestResult = reply.split(b'\x00', 1)[0]
@@ -218,7 +218,7 @@ def selftest(command: bytes) -> str:
 
 
 @Command(command='01 06', shortcut='ss', required=False, expReply=False, category=Command.Type.UTIL)
-def saveSettings(command: bytes):
+def saveSettings():
     """ API: saveSettings()
         Return: None
         Raises: [SerialError] - transceiver exception
@@ -227,12 +227,12 @@ def saveSettings(command: bytes):
                 DataInvalidError - reply contains extra data [configurable]
     """
 
-    reply = transaction(command)
+    reply = transaction(saveSettings.command)
     if CHECK_DATA: Command.checkEmpty(reply)
 
 
 @Command(command='01 07', shortcut='tch', required=False, expReply=True, category=Command.Type.UTIL)
-def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
+def testChannel(data: str = None, n: int = None) -> bytes:
     """ API: testChannel([data='XX XX ... XX'/'random'], [n=<data size in bytes>])
         Return: N bytes of test data received from device
         Raises: [SerialError] - transceiver exception
@@ -263,7 +263,7 @@ def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
     log.debug(f"Tch hex data: {bytewise(checkingData, collapseAfter=25)}")
 
     checkingData += b'\x00'
-    reply = transaction(command + checkingData)
+    reply = transaction(testChannel.command + checkingData)
 
     if (reply != checkingData):
         raise DataInvalidError(f"Invalid reply - expected [{bytewise(checkingData, collapseAfter=25)}], "
@@ -273,7 +273,7 @@ def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
 
 
 @Command(command='03 01', shortcut='sc', required=True, expReply=2, category=Command.Type.SIG)
-def signalsCount(command: bytes) -> int:
+def signalsCount() -> int:
     """ API: signalsCount()
         Return: number of signals
         Raises: [SerialError] - transceiver exception
@@ -282,7 +282,7 @@ def signalsCount(command: bytes) -> int:
                 DataInvalidError - failed to parse signals count number
     """
 
-    reply = transaction(command)
+    reply = transaction(signalsCount.command)
 
     try:
         nSignals = struct.unpack('< H', reply)[0]
@@ -292,7 +292,7 @@ def signalsCount(command: bytes) -> int:
 
 
 @Command(command='03 02', shortcut='rsd', required=True, expReply=True, category=Command.Type.SIG)
-def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
+def readSignalDescriptor(signalNum: int) -> Signal:
     """ API: readSignalDescriptor(signalNum=<signalNum number>)
         Return: Signal() object (value is not set)
         Raises: [SerialError] - transceiver exception
@@ -306,7 +306,7 @@ def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
     if not isinstance(signalNum, int) or signalNum < 0:
         raise SignatureError(f"Invalid signal number - expected positive integer, got '{signalNum}'")
 
-    reply = transaction(command + struct.pack('< H', signalNum))
+    reply = transaction(readSignalDescriptor.command + struct.pack('< H', signalNum))
 
     # Parse signal name
     try:
@@ -336,7 +336,7 @@ def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
 
 
 @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)
-def manageSignal(command: bytes, signal: Union[int, Signal], value: Any = None,
+def manageSignal(signal: Union[int, Signal], value: Any = None,
                  mode: Union[int, str, Signal.Mode] = None) -> Union[str, int, float, bool]:
     """ API: manageSignal(signal=Signal()/<signal number>, [value=<signal value>],
                          [mode=<0|1|2>/<free|fixed|sign>/Signal.Mode])
@@ -397,7 +397,7 @@ def manageSignal(command: bytes, signal: Union[int, Signal], value: Any = None,
     except StructParseError:
         raise ValueError(f"Failed to assign '{value}' to '{signal.name}' signal")
 
-    reply = transaction(command + commandParams + commandValue)
+    reply = transaction(manageSignal.command + commandParams + commandValue)
 
     if CHECK_DATA: Command.checkEmpty(reply)
     signal.mode = Signal.Mode(mode)
@@ -409,13 +409,13 @@ def manageSignal(command: bytes, signal: Union[int, Signal], value: Any = None,
 
 
 @Command(command='03 04', shortcut='ssg', required=False, expReply=0, category=Command.Type.SIG)
-def setSignature(command: bytes, *args):
+def setSignature(*args):
     """ API: <NotImplemented> """
     raise NotImplementedError()
 
 
 @Command(command='03 05', shortcut='rs', required=False, expReply=False, category=Command.Type.SIG)
-def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
+def readSignal(signal: Union[int, Signal]) -> Any:
     """ API: readSignal(signal=Signal()/<signal number>)
         Detail: if 'signal' is signal number, additional descriptor query transaction is performed
         Raises: [SerialError] - transceiver exception
@@ -427,7 +427,7 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
 
     signal = _convertSignal_(signal)
 
-    reply = transaction(command + struct.pack('< H', signal.n))
+    reply = transaction(readSignal.command + struct.pack('< H', signal.n))
 
     if signal.vartype == Signal.Type.String:
         try:
@@ -452,7 +452,7 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
 
 
 @Command(command='04 01', shortcut='rtd', required=True, expReply=12, category=Command.Type.TELE)
-def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
+def readTelemetryDescriptor(device: str = None) -> Telemetry:
     """ API: readTelemetryDescriptor([device='<device name>'])
         TODO: Raises, Return, etc.
     """
@@ -460,7 +460,7 @@ def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
     if device is not None and not isinstance(device, str):
         raise SignatureError(f"Invalid 'device' argument - expected 'str', got {device.__class__.__name__}")
 
-    reply = transaction(command)
+    reply = transaction(readTelemetryDescriptor.command)
 
     # Parse descriptor struct
     try:
@@ -479,7 +479,7 @@ def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
 
 
 @Command(command='04 02', shortcut='st', required=True, expReply=False, category=Command.Type.TELE)
-def setTelemetry(command: bytes, tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
+def setTelemetry(tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
                  divider: int = None, frameSize: int = None):
     """ API: setTelemetry(tm=Telemetry(), [mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode],
                           [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
@@ -526,11 +526,11 @@ def setTelemetry(command: bytes, tm: Telemetry, mode: Union[int, str, Telemetry.
 
 
 @Command(command='04 03', shortcut='as', required=True, expReply=NotImplemented, category=Command.Type.TELE)
-def addSignal(command: bytes, tm: Telemetry, signal: Union[int, Signal]):
+def addSignal(tm: Telemetry, signal: Union[int, Signal]):
     """ API: addSignal(tm=Telemetry(), signal=Signal()/<signal number>) """
 
     signal = _convertSignal_(signal)
-    reply = transaction(command + struct.pack('< H', signal.n))
+    reply = transaction(addSignal.command + struct.pack('< H', signal.n))
 
     if CHECK_DATA: Command.checkEmpty(reply)
 

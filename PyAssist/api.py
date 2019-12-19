@@ -16,9 +16,19 @@ from .errors import *
 log = Logger('API')
 log.setLevel('SPAM')
 
-
 # TODO: remove Assist class and use module-level functions instead
 
+
+"""
+   Command method API docstring micro-syntax:
+
+   (..., ...) - method parameters
+   [...]      - optional parameter
+   .../...    - variations of parameter type
+   ...|...    - variations of parameter value
+   <...>      - lexeme bounds
+   ...        - arbitrary number of elements
+"""
 
 ACK_OK = 0x00
 ACK_BAD = 0xFF
@@ -31,9 +41,11 @@ TESTCHANNEL_MAX_DATALEN = 1023
 TESTCHANNEL_DEFAULT_DATABYTE = 'AA'
 BASE_SIGNAL_DESCRIPTOR_SIZE = 17
 
+
 class TransceiverPlaceholder:
     def __getattr__(self, item):
         raise RuntimeError("Cannot perform transaction - 'api.transceiver' is not set")
+
 
 transceiver = TransceiverPlaceholder()
 
@@ -75,6 +87,7 @@ def transaction(data: bytes) -> bytes:
     # Cut ACK and LRC bytes
     return reply[1:-1]
 
+
 def sendCommand(command: str, data: str = '') -> bytes:
     """ Send command manually
         Raises: [SerialError] - transceiver exception
@@ -87,6 +100,7 @@ def sendCommand(command: str, data: str = '') -> bytes:
     except (ValueError, TypeError):
         raise SignatureError(f"Invalid hex string: {' '.join((command, data))}")
     return transaction(bytes.fromhex(command) + packet)
+
 
 @Command(command='01 01', shortcut='chch', required=True, expReply=8, category=Command.Type.UTIL)
 def checkChannel(command: bytes, data: str = None) -> bytes:
@@ -118,6 +132,7 @@ def checkChannel(command: bytes, data: str = None) -> bytes:
                                f"got [{bytewise(reply)}]", expected=checkingData, actual=reply)
     return reply
 
+
 @Command(command='01 02', shortcut='r', required=False, expReply=False, category=Command.Type.UTIL)
 def reset(command: bytes):
     """ API: reset()
@@ -129,8 +144,8 @@ def reset(command: bytes):
     """
 
     reply = transaction(command)
-
     if CHECK_DATA: Command.checkEmpty(reply)
+
 
 @Command(command='01 03', shortcut='i', required=True, expReply=True, category=Command.Type.UTIL)
 def deviceInfo(command: bytes) -> str:
@@ -153,6 +168,7 @@ def deviceInfo(command: bytes) -> str:
     if CHECK_DATA: Command.checkStrExtra(infoBytes, reply)
 
     return infoBytes.decode('utf-8', errors='replace')
+
 
 @Command(command='01 04', shortcut='sm', required=True, expReply=False, category=Command.Type.UTIL)
 def scanMode(command: bytes, enable: bool):
@@ -200,6 +216,7 @@ def selftest(command: bytes) -> str:
 
     return selftestResult.decode('utf-8', errors='replace')
 
+
 @Command(command='01 06', shortcut='ss', required=False, expReply=False, category=Command.Type.UTIL)
 def saveSettings(command: bytes):
     """ API: saveSettings()
@@ -211,8 +228,8 @@ def saveSettings(command: bytes):
     """
 
     reply = transaction(command)
-
     if CHECK_DATA: Command.checkEmpty(reply)
+
 
 @Command(command='01 07', shortcut='tch', required=False, expReply=True, category=Command.Type.UTIL)
 def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
@@ -254,6 +271,7 @@ def testChannel(command: bytes, data: str = None, n: int = None) -> bytes:
                                expected=checkingData, actual=reply)
     return reply
 
+
 @Command(command='03 01', shortcut='sc', required=True, expReply=2, category=Command.Type.SIG)
 def signalsCount(command: bytes) -> int:
     """ API: signalsCount()
@@ -271,6 +289,7 @@ def signalsCount(command: bytes) -> int:
     except StructParseError:
         raise DataInvalidError(f"Cannot convert data to integer value: [{bytewise(reply)}]", data=reply)
     return nSignals
+
 
 @Command(command='03 02', shortcut='rsd', required=True, expReply=True, category=Command.Type.SIG)
 def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
@@ -311,15 +330,15 @@ def readSignalDescriptor(command: bytes, signalNum: int) -> Signal:
     if signal.varclass is not Signal.Class.Std:
         raise NotImplementedError("Complex type class signals are not supported")
 
-    log.verbose('\n'+signal.format())
+    log.verbose('\n' + signal.format())
 
     return signal
 
+
 @Command(command='03 03', shortcut='ms', required=False, expReply=False, category=Command.Type.SIG)
-def manageSignal(command: bytes, signal: Union[int, Signal],
-                 value: Any = None, mode: Union[int, str, Signal.Mode] = None) -> Any:
-    """ API: manageSignal(signal=Signal()/<signal number>,
-                         [value=<signal value>],
+def manageSignal(command: bytes, signal: Union[int, Signal], value: Any = None,
+                 mode: Union[int, str, Signal.Mode] = None) -> Union[str, int, float, bool]:
+    """ API: manageSignal(signal=Signal()/<signal number>, [value=<signal value>],
                          [mode=<0|1|2>/<free|fixed|sign>/Signal.Mode])
         Detail: Additional 'read signal' transaction is performed
                     after 'manage signal' transaction to synchronize signal value
@@ -367,11 +386,9 @@ def manageSignal(command: bytes, signal: Union[int, Signal],
     # Check 'value' argument
     if value is None:
         value = readSignal(signal)
-    else:
-        if type(value) is not signal.vartype.pytype:
-            raise ValueError(f"Invalid value type for '{signal.name}' signal - "
-                             f"expected '{signal.vartype.pytype.__name__}', "
-                             f"got '{value.__class__.__name__}'")
+    elif type(value) is not signal.vartype.pytype:
+        log.warning(f"Invalid value for '{signal.name}' signal - expected "
+                    f"'{signal.vartype.pytype.__name__}', got '{value.__class__.__name__}'")
 
     # Pack and send command
     commandParams = struct.pack('< H B', signal.n, mode)
@@ -390,10 +407,12 @@ def manageSignal(command: bytes, signal: Union[int, Signal],
 
     return signal.value
 
+
 @Command(command='03 04', shortcut='ssg', required=False, expReply=0, category=Command.Type.SIG)
 def setSignature(command: bytes, *args):
     """ API: <NotImplemented> """
     raise NotImplementedError()
+
 
 @Command(command='03 05', shortcut='rs', required=False, expReply=False, category=Command.Type.SIG)
 def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
@@ -431,6 +450,7 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
 
     return sigValue
 
+
 @Command(command='04 01', shortcut='rtd', required=True, expReply=12, category=Command.Type.TELE)
 def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
     """ API: readTelemetryDescriptor([device='<device name>'])
@@ -447,7 +467,6 @@ def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
         params = struct.unpack('< I H H I', reply)
     except StructParseError:
         raise DataInvalidError(f"Failed to parse telemetry descriptor: [{bytewise(reply)}]", data=reply)
-
     log.debug(f"Raw '{device}' telemetry struct: {params}")
 
     if (flag(params[3], 0) == 1): raise NotImplementedError("Stream transmission mode is not supported")
@@ -458,12 +477,85 @@ def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
 
     return tm
 
+
+@Command(command='04 02', shortcut='st', required=True, expReply=False, category=Command.Type.TELE)
+def setTelemetry(command: bytes, tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
+                 divider: int = None, frameSize: int = None):
+    """ API: setTelemetry(tm=Telemetry(), [mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode],
+                          [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
+        TODO
+    """
+
+    # TODO: extract .divider and .frameSize from tm
+
+    # Check 'mode' argument
+    Modes = Telemetry.Mode
+    if isinstance(mode, Modes):
+        mode = mode.value  # convert to mode index
+    elif isinstance(mode, str):
+        try:
+            mode = Modes[mode.capitalize()].value  # convert to mode index
+        except KeyError:
+            raise SignatureError(f"Invalid mode '{mode}' - expected within " +
+                                 f"[{', '.join((s.lower() for s in Modes.__members__.keys()))}]")
+    elif isinstance(mode, int) and mode >= len(Modes):
+        raise SignatureError(f"Invalid mode {mode} - expected within [0..{len(Modes) - 1}]")
+    else:
+        raise SignatureError(f"Invalid 'mode' argument - {mode}")
+
+    if Modes(mode) not in (Modes.Stop, Modes.Reset):
+
+        # Check 'divider' argument
+        if divider == 0:
+            raise SignatureError(f"Missing 'divider' argument")
+        if not isinstance(divider, int) or divider < 1:
+            raise ValueError(f"Invalid frequency divider argument - expected integer > 0, got '{divider}'")
+
+        # Check 'frameSize' argument
+        if Telemetry.Attrs.Framing in tm.attrs:
+            if frameSize is None:
+                log.warning(f"Frame size is not provided, using maximum value - {tm.maxFrameSize}")
+                frameSize = tm.maxFrameSize
+            if not isinstance(frameSize, int) or frameSize < 1 or frameSize > tm.maxFrameSize:
+                raise SignatureError(f"Invalid dataframe size argument - expected "
+                                     f"integer within [1..{tm.maxFrameSize}], got '{frameSize}'")
+
+    reply = transaction(command + struct.pack('< B I H', mode, divider or 0, frameSize or 0))
+
+    if CHECK_DATA: Command.checkEmpty(reply)
+
+
+@Command(command='04 03', shortcut='as', required=True, expReply=NotImplemented, category=Command.Type.TELE)
+def addSignal(command: bytes, tm: Telemetry, signal: Union[int, Signal]):
+    """ API: addSignal(tm=Telemetry(), signal=Signal()/<signal number>) """
+
+    signal = _convertSignal_(signal)
+    reply = transaction(command + struct.pack('< H', signal.n))
+
+    if CHECK_DATA: Command.checkEmpty(reply)
+
+
+@Command(command='04 04', shortcut='rt', required=True, expReply=NotImplemented, category=Command.Type.TELE)
+def readTelemetry(command, replyDataLen):
+    """ API: TODO """
+
+    reply = transaction(command, replyDataLen)
+    if (not reply): raise DataInvalidError("Empty data") #TODO: what to do if reply is empty? ...
+
+    print(bytewise(reply))
+
+    return NotImplemented
+
+
+
+
+
 # TODO: telemetry handling methods
 
 # TODO: warn if frameSize and similar telemetry parameters would exceed maximums set by tm descriptor
 
 def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,
-                      showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:
+                showProgress: bool = False) -> Tuple[Union[SignalsTree, tuple], tuple]:
     """ API: scanSignals(attempts=N, tree=True/False, showProgress=True/False)
                 Detail:
                     'tree' - signals collection output format:

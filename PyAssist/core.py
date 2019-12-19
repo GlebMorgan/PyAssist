@@ -647,7 +647,7 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     # Telemetry-defined parameters
     with TAG('variables'):
-        splitPeriod: int = Null
+        divider: int = Null
         frameSize: int = Null
         mode: Mode = Mode.Reset
         status: Status = Status.Disabled
@@ -685,16 +685,16 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     @property
     def frequency(self) -> float: #Hz
-        return 1_000_000 / (self.minPeriod * self.splitPeriod) if self.splitPeriod else Null
+        return 1_000_000 / (self.minPeriod * self.divider) if self.divider else Null
 
     @property
     def period(self) -> float: #μs
-        return self.minPeriod * self.splitPeriod if self.splitPeriod else Null
+        return self.minPeriod * self.divider if self.divider else Null
 
     def format(self) -> str:
         lines = []
 
-        for name in ('name', 'mode', 'status', 'minPeriod', 'splitPeriod', 'frequency',
+        for name in ('name', 'mode', 'status', 'minPeriod', 'divider', 'frequency',
                      'attrs', 'frameSize', 'maxFrameSize', 'maxNumSignals'):
             lines.append(f"{name.rjust(self.attrNamesWidth)} - "
                          f"{getattr(self, name, stubs['notAssigned'])}")
@@ -712,11 +712,11 @@ class Telemetry(metaclass=Classtools, slots=True):
                 name = f"Telemetry '{self.name}'" if self.name is not Null else 'Telemetry',
                 mode = self.mode.state,
                 status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
-                perf = f'({self.formatPeriod(self.period)}, {self.formatFreq(self.frequency)}) '
-                       if self.splitPeriod else '',
-                frameSize = f'{self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
+                perf = f' ({self.formatPeriod(self.period)}, {self.formatFreq(self.frequency)})'
+                       if self.divider else '',
+                frameSize = f' {self.frameSize} samples/frame ' if self.Attrs.Framing in self.attrs else '',
                 attrs = self.attrs,
-                signals=', '.join(s.name for s in self.signals) if self.signals else stubs['noSignals'],
+                signals = ', '.join(s.name for s in self.signals) if self.signals else stubs['noSignals'],
             )
         )
 

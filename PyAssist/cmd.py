@@ -12,6 +12,9 @@ from .assist_packet_formatter import PacketFormatter
 from .errors import *
 
 
+# TODO: evaluate 'userinput' on CommandError not to prepend '>' every time
+
+
 log = Logger("Cmd")
 log.setConsoleHandler(Formatters.simpleColored)
 log.setLevel('SPAM')
@@ -89,10 +92,20 @@ def scandev(start, end):
 
 
 def test(*args, env):
-    if args[0] == 'scandev':
+    command = args[0]
+
+    # scan devices
+    if command == 'sd':
         scandev(args[1], args[2])
-    if args[0] == 'setuptm':
+
+    # setup telemetry
+    if command == 'stm':
         env[1]['tm'] = Telemetry.init()
+
+    # sample signal
+    if command == 'ss':
+        with Logger.suppressed('all', 'WARNING'):
+            env[1]['sig'] = api.scanSignals(init=False, showProgress=True)[0][3]
 
 
 def apiTest():

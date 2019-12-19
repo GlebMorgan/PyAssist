@@ -458,6 +458,19 @@ def readSignal(signal: Union[int, Signal]) -> Any:
     return sigValue
 
 
+'Basic telemetry monitoring session'
+
+# PLAY
+'reset'           '5A-0C-05-00-A0-F3 04-02 00 01 00 00 00 00 00 07 FB-F5'
+'add signal'      '5A-0C-03-80-A2-73 04-03 01 00 06 00 F4-FC'
+'start buffered'  '5A-0C-05-00-A0-F3 04-02 03 C8 00 00 00 00 00 CD F7-68'
+'read data'       '5A-0C-02-80-A3-73 04-04 00 00 FB-FB'
+'...'
+
+# STOP
+'reset'           '5A-0C-05-00-A0-F3 04-02 00 01 00 00 00 00 00 07 FB-F5'
+
+
 @Command(command='04 01', shortcut='rtd', required=True, expReply=12, category=Command.Type.TELE)
 def readTelemetryDescriptor(device: str = None) -> Telemetry:
     """ API: readTelemetryDescriptor([device='<device name>'])
@@ -530,7 +543,7 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
                 raise SignatureError(f"Invalid dataframe size argument - expected "
                                      f"integer within [1..{tm.maxFrameSize}], got '{frameSize}'")
 
-    reply = transaction(setTelemetry.command + struct.pack('< B I H', mode.value, divider or 0, frameSize or 0))
+    reply = transaction(setTelemetry.command + struct.pack('< B I H', mode.value, divider or 1, frameSize or 0))
 
     if CHECK_DATA: Command.checkEmpty(reply)
 

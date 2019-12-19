@@ -7,8 +7,8 @@ from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, Li
 
 from CPython.Lib.functools import singledispatchmethod
 from Transceiver import SerialError, Transceiver
-from Utils import Logger, bytewise, Dummy, auto_repr, classproperty, Null, formatDict, SingletonType
-from src.Experiments.attr_tagging_concise import Classtools, TAG, const, lazy
+from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict
+from src.Experiments.attr_tagging_concise import Classtools, TAG, const
 
 from . import api
 from .config import CONFIG
@@ -655,7 +655,7 @@ class Telemetry(metaclass=Classtools, slots=True):
         frameSize: int = Null
         mode: Mode = Mode.Reset
         status: Status = Status.Disabled
-        signals: Sequence[Signal] = []
+        signals: List[Signal] = []
         data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
 
     @classmethod
@@ -751,6 +751,18 @@ class Telemetry(metaclass=Classtools, slots=True):
     formatFreq: MethodType = partialmethod(formatValue, baseQuantity='Hz')
 
     formatPeriod: MethodType = partialmethod(formatValue, baseQuantity='μs')
+
+    @classmethod
+    def injectApiMethods(cls):
+        """ Add api methods-aliases to current class
+            Intended to be called after both
+                core.py and api.py modules would be fully loaded
+        """
+        cls.run: MethodType = partial(api.setTelemetry, cls.Mode.Run)
+        cls.stop: MethodType = partial(api.setTelemetry, cls.Mode.Stop)
+        cls.reset: MethodType = partial(api.setTelemetry, cls.Mode.Reset)
+        cls.add: MethodType = partial(api.addSignal)
+        cls.read: MethodType = partial(api.readTelemetry)
 
 
 # ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #

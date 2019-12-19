@@ -7,8 +7,8 @@ from Utils import bytewise, Logger, formatList
 from Utils.colored_logger import LogRecordFormat, LogStyle, LogDateFormat, Formatters
 
 from . import api
-from .assist_packet_formatter import PacketFormatter
 from .core import Command, Signal, Telemetry
+from .assist_packet_formatter import PacketFormatter
 from .errors import *
 
 
@@ -20,6 +20,7 @@ slog.setConsoleHandler(PacketFormatter(colorstyle='console',
         fmt=LogRecordFormat, datefmt=LogDateFormat, style='{',
         level_styles=LogStyle.records, field_styles=LogStyle.fields))
 
+Telemetry.injectApiMethods()
 
 insidePyCharm = "PYCHARM_HOSTED" in os.environ
 prompt = '' if insidePyCharm else '--> '
@@ -127,7 +128,8 @@ def apiTest():
 
                 elif userinput == 'read':
                     reply = com.read(com.in_waiting)
-                    log.verbose(f"Buffer [{len(reply)}]: {bytewise(reply)}") if (reply) else log.verbose("<Void>")
+                    log.verbose(f"Buffer [{len(reply)}]: "
+                                f"{bytewise(reply)}") if (reply) else log.verbose("<Void>")
 
                 else:
                     command, *params = userinput.split()

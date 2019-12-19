@@ -636,6 +636,8 @@ class Telemetry(metaclass=Classtools, slots=True):
         Framing = 1 << 1    # divide data in frames and send it on .readData command
         Buffering = 1 << 2  # send data on .readData command
 
+    active: ClassVar[Telemetry] = None
+
     # Assist-defined parameters
     with TAG('service'):
         name: str = Null  # TODO: could be None
@@ -655,6 +657,13 @@ class Telemetry(metaclass=Classtools, slots=True):
         status: Status = Status.Disabled
         signals: Sequence[Signal] = []
         data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
+
+    @classmethod
+    def init(cls, name: str = None):
+        this = api.readTelemetryDescriptor(name)
+        if name: this.name = name
+        cls.active = this
+        return this
 
     @classmethod
     def from_struct(cls, params: Sequence, device: str = None) -> Telemetry:

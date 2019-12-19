@@ -479,31 +479,32 @@ def readTelemetryDescriptor(device: str = None) -> Telemetry:
 
 
 @Command(command='04 02', shortcut='st', required=True, expReply=False, category=Command.Type.TELE)
-def setTelemetry(tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
-                 divider: int = None, frameSize: int = None):
-    """ API: setTelemetry(tm=Telemetry(), [mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode],
-                          [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
-        TODO
+def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None, frameSize: int = None):
+    """ API: setTelemetry(mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode,
+                         [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
+        Details: if Telemetry.active is None, readTelemetryDescriptor() will be called
+                     via Telemetry.init() to acquire telemetry object
     """
-
-    # TODO: extract .divider and .frameSize from tm
 
     # Check 'mode' argument
     Modes = Telemetry.Mode
     if isinstance(mode, Modes):
-        mode = mode.value  # convert to mode index
+        pass  # already converted
     elif isinstance(mode, str):
         try:
-            mode = Modes[mode.capitalize()].value  # convert to mode index
+            mode = Modes[mode.capitalize()]  # convert from string
         except KeyError:
             raise SignatureError(f"Invalid mode '{mode}' - expected within " +
                                  f"[{', '.join((s.lower() for s in Modes.__members__.keys()))}]")
-    elif isinstance(mode, int) and mode >= len(Modes):
-        raise SignatureError(f"Invalid mode {mode} - expected within [0..{len(Modes) - 1}]")
+    elif isinstance(mode, int):
+        try:
+            mode = Modes(mode)  # convert from int
+        except ValueError:
+            raise SignatureError(f"Invalid mode {mode} - expected within [0..{len(Modes) - 1}]")
     else:
         raise SignatureError(f"Invalid 'mode' argument - {mode}")
 
-    if Modes(mode) not in (Modes.Stop, Modes.Reset):
+    if mode not in (Modes.Stop, Modes.Reset):
 
         # Check 'divider' argument
         if divider == 0:
@@ -512,6 +513,7 @@ def setTelemetry(tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
             raise ValueError(f"Invalid frequency divider argument - expected integer > 0, got '{divider}'")
 
         # Check 'frameSize' argument
+        tm = Telemetry.active or Telemetry.init()
         if Telemetry.Attrs.Framing in tm.attrs:
             if frameSize is None:
                 log.warning(f"Frame size is not provided, using maximum value - {tm.maxFrameSize}")
@@ -520,7 +522,7 @@ def setTelemetry(tm: Telemetry, mode: Union[int, str, Telemetry.Mode] = None,
                 raise SignatureError(f"Invalid dataframe size argument - expected "
                                      f"integer within [1..{tm.maxFrameSize}], got '{frameSize}'")
 
-    reply = transaction(command + struct.pack('< B I H', mode, divider or 0, frameSize or 0))
+    reply = transaction(setTelemetry.command + struct.pack('< B I H', mode.value, divider or 0, frameSize or 0))
 
     if CHECK_DATA: Command.checkEmpty(reply)
 

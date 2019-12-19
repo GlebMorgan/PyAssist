@@ -91,7 +91,7 @@ def test(*args, env):
     if args[0] == 'scandev':
         scandev(args[1], args[2])
     if args[0] == 'setuptm':
-        env[1]['tm'] = api.readTelemetryDescriptor()
+        env[1]['tm'] = Telemetry.init()
 
 
 def apiTest():

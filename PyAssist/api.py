@@ -425,11 +425,13 @@ def readSignal(command: bytes, signal: Union[int, Signal]) -> Any:
     return sigValue
 
 @Command(command='04 01', shortcut='rtd', required=True, expReply=12, category=Command.Type.TELE)
-def readTelemetryDescriptor(command, device: str):
-    """ API: readTelemetryDescriptor() """
+def readTelemetryDescriptor(command: bytes, device: str = None) -> Telemetry:
+    """ API: readTelemetryDescriptor([device='<device name>'])
+        TODO: Raises, Return, etc.
+    """
 
-    if not isinstance(device, str):
-        raise TypeError(f"Invalid 'device' argument - expected 'str', got {device.__class__.__name__}")
+    if device is not None and not isinstance(device, str):
+        raise SignatureError(f"Invalid 'device' argument - expected 'str', got {device.__class__.__name__}")
 
     reply = transaction(command)
 
@@ -444,8 +446,7 @@ def readTelemetryDescriptor(command, device: str):
     if (flag(params[3], 0) == 1): raise NotImplementedError("Stream transmission mode is not supported")
     if (flag(params[3], 1) == 1): raise NotImplementedError("Data framing is not supported")
 
-    tm = Telemetry.from_struct(device, params)
-
+    tm = Telemetry.from_struct(params, device)
     log.verbose('\n' + tm.format())
 
     return tm

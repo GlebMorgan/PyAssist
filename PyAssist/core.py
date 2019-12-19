@@ -636,7 +636,7 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     # Assist-defined parameters
     with TAG('service'):
-        name: str  # TODO: could be None
+        name: str = Null  # TODO: could be None
 
     # Descriptor-defined parameters
     with TAG('params') |const:
@@ -655,14 +655,14 @@ class Telemetry(metaclass=Classtools, slots=True):
         data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
 
     @classmethod
-    def from_struct(cls, device: str, params: Sequence) -> Telemetry:
+    def from_struct(cls, params: Sequence, device: str = None) -> Telemetry:
         """ Create Telemetry object and initialize it with `params` arguments
             Usage:
             >>> tm = Telemetry.from_struct(device_name, descriptor_params))
         """
 
         this = cls.__new__(cls)
-        this.name = device
+        this.name = device or Telemetry['name'].default
 
         for i, name in enumerate(cls.__tags__['params']):
             try:
@@ -703,12 +703,13 @@ class Telemetry(metaclass=Classtools, slots=True):
         return '\n'.join(lines)
 
     def __str__(self):
-        return f"Telemetry '{self.name}': {self.mode.state} <{self.status}> [{len(self.signals)}]"
+        header = f"Telemetry '{self.name}'" if self.name is not Null else 'Telemetry'
+        return f"{header}: {self.mode.state} <{self.status}> [{len(self.signals)}]"
 
     def __repr__(self):
         return auto_repr(self,
-            "'{name}': {mode}{status} {perf}{frameSize}{attrs} [{signals}]".format(
-                name = self.name,
+            "{name}: {mode}{status}{perf}{frameSize} {attrs} [{signals}]".format(
+                name = f"Telemetry '{self.name}'" if self.name is not Null else 'Telemetry',
                 mode = self.mode.state,
                 status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
                 perf = f'({self.formatPeriod(self.period)}, {self.formatFreq(self.frequency)}) '

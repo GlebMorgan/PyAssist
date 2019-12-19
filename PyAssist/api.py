@@ -173,7 +173,8 @@ def scanMode(command: bytes, enable: bool):
 
     if CHECK_DATA: Command.checkEmpty(reply)
 
-@Command(command='01 05', shortcut='st', required=False, expReply=True, category=Command.Type.UTIL)
+
+@Command(command='01 05', shortcut='sft', required=False, expReply=True, category=Command.Type.UTIL)
 def selftest(command: bytes) -> str:
     """ API: selftest()
         Return: Selftest result string

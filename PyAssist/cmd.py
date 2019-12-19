@@ -8,7 +8,7 @@ from Utils.colored_logger import LogRecordFormat, LogStyle, LogDateFormat, Forma
 
 from . import api
 from .assist_packet_formatter import PacketFormatter
-from .core import Command, Signal
+from .core import Command, Signal, Telemetry
 from .errors import *
 
 
@@ -87,15 +87,17 @@ def scandev(start, end):
     api.transceiver.deviceAddress = oldDevice
 
 
-def test(*args):
+def test(*args, env):
     if args[0] == 'scandev':
         scandev(args[1], args[2])
+    if args[0] == 'setuptm':
+        env[1]['tm'] = api.readTelemetryDescriptor()
 
 
 def apiTest():
 
     with api.transceiver as com:
-        env = (globals(), {'api': api, 'com': com, 'Signal': Signal})
+        env = (globals(), {'api': api, 'com': com, 'Signal': Signal, 'Telemetry': Telemetry})
 
         for n in range(10_000):
             try:
@@ -105,7 +107,7 @@ def apiTest():
                     continue
 
                 elif userinput in ('e', 'exit'):
-                    log.error("Terminated :)")
+                    log.critical("Terminated :)")
                     break
 
                 elif userinput.startswith('-'):
@@ -134,7 +136,7 @@ def apiTest():
                         showHelp(*params)
 
                     elif command in ('t', 'test'):
-                        test(*params)
+                        test(*params, env=env)
 
                     elif command in ('s', 'scans'):
                         createTree = not 'list' in params

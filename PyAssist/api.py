@@ -16,7 +16,6 @@ from .errors import *
 log = Logger('API')
 log.setLevel('SPAM')
 
-# TODO: remove Assist class and use module-level functions instead
 
 
 """
@@ -363,6 +362,7 @@ def manageSignal(signal: Union[int, Signal], value: Any = None,
                 ValueError - failed to assign value 'value' to 'signal'
                 NotImplementedError - Mode.Sign
                 NotImplementedError - Signal.Type.String
+        TODO: fix 'Detail' - no additional transactions are performed now
     """
 
     # Check 'signal' argument
@@ -407,12 +407,6 @@ def manageSignal(signal: Union[int, Signal], value: Any = None,
     reply = transaction(manageSignal.command + commandParams + commandValue)
 
     if CHECK_DATA: Command.checkEmpty(reply)
-    signal.mode = Signal.Mode(mode)
-
-    # Sync signal value
-    readSignal(signal)  # CONSIDER: do I need this and how to sync properly?
-
-    return signal.value
 
 
 @Command(command='03 04', shortcut='ssg', required=False, expReply=0, category=Command.Type.SIG)
@@ -430,6 +424,7 @@ def readSignal(signal: Union[int, Signal]) -> Any:
                 BadCrcError - XOR check failed [configurable]
                 SignatureError - invalid 'signal' argument
                 DataInvalidError - reply contains extra data [configurable]
+        TODO: fix 'Detail' - no additional transactions are performed now
     """
 
     signal = _ensureSignal_(signal)
@@ -452,10 +447,7 @@ def readSignal(signal: Union[int, Signal]) -> Any:
             raise DataInvalidError(f"Failed to parse '{signal.name}' signal value: "
                                    f"[{bytewise(reply)}]", data=reply)
 
-    sigValue = signal.vartype.pytype(sigValue)
-    signal.value = sigValue
-
-    return sigValue
+    return signal.vartype.pytype(sigValue)
 
 
 'Basic telemetry monitoring session'
@@ -504,6 +496,7 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
     """ API: setTelemetry(mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode,
                          [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
         Raises: RuntimeError - Telemetry.active is None and additional 'tm' argument is not provided
+        TODO: fix 'Detail' - no additional transactions are performed now
     """
 
     tm = _ensureTelemetry_(tm)
@@ -547,10 +540,6 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
 
     if CHECK_DATA: Command.checkEmpty(reply)
 
-    tm.mode = mode
-    if divider: tm.divider = divider
-    if frameSize: tm.frameSize = frameSize
-
 
 @Command(command='04 03', shortcut='as', required=True, expReply=NotImplemented, category=Command.Type.TELE)
 def addSignal(signal: Union[int, Signal], *, tm: Telemetry = None):
@@ -565,8 +554,6 @@ def addSignal(signal: Union[int, Signal], *, tm: Telemetry = None):
     reply = transaction(addSignal.command + struct.pack('< H', signal.n))
 
     if CHECK_DATA: Command.checkEmpty(reply)
-
-    tm.signals.append(signal)
 
 
 @Command(command='04 04', shortcut='rt', required=True, expReply=NotImplemented, category=Command.Type.TELE)

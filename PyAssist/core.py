@@ -307,6 +307,11 @@ class SignalsTree:
     def __iter__(self):
         return iter(self.data)
 
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.data == other.data
+        raise NotImplementedError
+
 
 class Signal(metaclass=Classtools, slots=True, init=False):
     """ Signal docstring

@@ -666,7 +666,7 @@ class Telemetry(metaclass=Classtools, slots=True):
         data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
 
     @classmethod
-    def init(cls, name: str = None):
+    def new(cls, name: str = None):
         this = api.readTelemetryDescriptor(name)
         if name: this.name = name
         cls.active = this

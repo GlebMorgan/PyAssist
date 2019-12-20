@@ -100,7 +100,7 @@ def test(*args, env):
 
     # setup telemetry
     if command == 'stm':
-        env[1]['tm'] = Telemetry.init()
+        env[1]['tm'] = Telemetry.new()
 
     # sample signal
     if command == 'ss':

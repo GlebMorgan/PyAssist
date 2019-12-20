@@ -7,7 +7,7 @@ from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, Li
 
 from CPython.Lib.functools import singledispatchmethod
 from Transceiver import SerialError, Transceiver
-from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict, flags
+from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict, AttrEnum
 from src.Experiments.attr_tagging_concise import Classtools, TAG, const
 
 from . import api
@@ -161,40 +161,24 @@ class Command():
             return docstring[methodNameStartIndex:endIndex]
 
 
-class ParamEnum(Enum):
-    @property
-    def index(self) -> int: return self.value
+class ParamEnum(AttrEnum):
 
-    def __index__(self): return self.value
-
-    def __str__(self): return self.name
+    def __str__(self):
+        return self.name
 
 
 class ParamFlagEnum(ParamEnum, Flag):
+
+    def __new__(cls, index, *args, **kwargs):
+        obj = object.__new__(cls)
+        obj._value_ = index
+        return obj
+
     def __str__(self):
         if self.value == 0:
             return stubs['noAttrs']
         else:
             return Flag.__str__(self)[self.__class__.__name__.__len__()+1:]
-
-    @property
-    def indexes(self) -> int:
-        """ Tuple of bools with each element denoting
-                whether respective flag is set
-            Length of tuple equals number of enum members
-            Considering enum has 5 members:
-
-            >>> ParamFlagEnum(1).indexes
-            (True, False, False, False, False)
-            >>> ParamFlagEnum(6).indexes
-            (False, True, True, False, False)
-            >>> ParamFlagEnum(0).indexes
-            (False, False, False, False, False)
-            >>> ParamFlagEnum(31).indexes
-            (True, True, True, True, True)
-        """
-
-        return flags(self.value, self.__class__.__len__())
 
 
 class SignalsTree:
@@ -404,6 +388,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Type(ParamEnum):
+        __names__ = 'index', 'code', 'pytype'
+
         String = 0, '' , str    # type 0: char[]  -> N bytes
         Bool =   1, 'B', bool   # type 1: uint_8  -> 1 byte
         Byte =   2, 'B', int    # type 2: uint_8  -> 1 byte
@@ -413,17 +399,10 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         Ulong =  6, 'I', int    # type 6: uint_32 -> 4 bytes
         Float =  7, 'f', float  # type 7: float   -> 4 bytes
 
-        def __new__(cls, idx: int, code: str, pyType: type):
-            member = object.__new__(cls)
-            member._value_ = idx
-            return member
-
-        def __init__(self, _, code: str, pytype: type):
-            self.code = code
-            self.pytype = pytype
-
     @unique
     class Attrs(ParamFlagEnum):
+        __names__ = 'index'
+
         Control = 1 << 0
         Node = 1 << 1
         Signature = 1 << 2
@@ -433,6 +412,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Dimen(ParamEnum):
+        __names__ = 'index', 'sign'
+
         Unitless = 0, ''
         Volt = 1, 'V'
         Ampere = 2, 'A'
@@ -443,14 +424,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         MeterPerSecond = 7, 'm/s'
         Celsius = 8, '°C'
         CelsiusPerSecond = 9, '°C/s'
-
-        def __new__(cls, idx: int, sign: str):
-            member = object.__new__(cls)
-            member._value_ = idx
-            return member
-
-        def __init__(self, _, sign: str):
-            self.sign = sign
 
     class Signature:
         NotImplemented
@@ -544,6 +517,8 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         return this
 
     def copy(self, **kwargs):  # TESTME
+        #CONSIDER: Do I need to remove .children from copied signal
+        #    (maybe there will be a risk of cycle references when signal will be added to SignalsTree?)
         new = self.__new__(self.__class__)
         for name in self.__slots__:
             try:
@@ -623,24 +598,19 @@ class Telemetry(metaclass=Classtools, slots=True):
     # CONSIDER: Telemetry() will return active tm object
 
     class Mode(ParamEnum):
-        Reset = 0, 'OFF'
-        Stream = 1, 'RUNNING (stream)'
-        Framed = 2, 'RUNNING (framed)'
-        Buffered = 3, 'RUNNING (buffered)'
-        Run = 3, 'RUNNING (buffered)'
-        Stop = 4, 'STOPPED'
+        __names__ = 'index', 'running', 'state'
 
-        def __new__(cls, idx: int, state: str):
-            member = object.__new__(cls)
-            member._value_ = idx
-            return member
-
-        def __init__(self, _, state: str):
-            self.state = state
+        Reset = 0, False, 'OFF'
+        Stream = 1, True, 'RUNNING (stream)'
+        Framed = 2, True, 'RUNNING (framed)'
+        Buffered = 3, True, 'RUNNING (buffered)'
+        Stop = 4, False, 'STOPPED'
 
     @unique
     class Status(ParamFlagEnum):
-        Disabled = None
+        __names__ = 'index'
+
+        Disabled = 0
         OK = 1 << 0
         Overflow = 1 << 1
         Error1 = 1 << 2
@@ -652,6 +622,8 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     @unique
     class Attrs(ParamFlagEnum):
+        __names__ = 'index'
+
         Streaming = 1 << 0  # continuous transmission of data samples
         Framing = 1 << 1    # divide data in frames and send it on .readData command
         Buffering = 1 << 2  # send data on .readData command
@@ -778,7 +750,7 @@ class Telemetry(metaclass=Classtools, slots=True):
             Intended to be called after both
                 core.py and api.py modules would be fully loaded
         """
-        cls.run: MethodType = partial(api.setTelemetry, cls.Mode.Run)
+        cls.run: MethodType = partial(api.setTelemetry, cls.Mode.Buffered)
         cls.stop: MethodType = partial(api.setTelemetry, cls.Mode.Stop)
         cls.reset: MethodType = partial(api.setTelemetry, cls.Mode.Reset)
         cls.add: MethodType = partial(api.addSignal)

@@ -7,7 +7,7 @@ from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, Li
 
 from CPython.Lib.functools import singledispatchmethod
 from Transceiver import SerialError, Transceiver
-from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict
+from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict, flags
 from src.Experiments.attr_tagging_concise import Classtools, TAG, const
 
 from . import api
@@ -178,10 +178,23 @@ class ParamFlagEnum(ParamEnum, Flag):
             return Flag.__str__(self)[self.__class__.__name__.__len__()+1:]
 
     @property
-    def index(self) -> int:
-        # CONSIDER: return tuple of corresponding flags indexes
-        # i.e. Attrs(Telemetry|Read|Control) should return (0, 3, 5)
-        raise NotImplementedError
+    def indexes(self) -> int:
+        """ Tuple of bools with each element denoting
+                whether respective flag is set
+            Length of tuple equals number of enum members
+            Considering enum has 5 members:
+
+            >>> ParamFlagEnum(1).indexes
+            (True, False, False, False, False)
+            >>> ParamFlagEnum(6).indexes
+            (False, True, True, False, False)
+            >>> ParamFlagEnum(0).indexes
+            (False, False, False, False, False)
+            >>> ParamFlagEnum(31).indexes
+            (True, True, True, True, True)
+        """
+
+        return flags(self.value, self.__class__.__len__())
 
 
 class SignalsTree:

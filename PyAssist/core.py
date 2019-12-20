@@ -594,8 +594,10 @@ class Signal(metaclass=Classtools, slots=True, init=False):
         try: return fetch('children')[name]
         except KeyError: raise AttributeError
 
-    def __hash__(self):
-        return hash(self.n)
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.n == other.n
+        raise NotImplementedError
 
 
 class Telemetry(metaclass=Classtools, slots=True):

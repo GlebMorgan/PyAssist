@@ -579,7 +579,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
                 n = self.n,
                 name = self.fullname if hasattr(self, 'fullname') else self.name or stubs['noNameAttr'],
                 value = round(self.value, 3)
-                        if self.value is not Null and self.vartype == self.Type.Float
+                        if self.value is not None and self.vartype == self.Type.Float
                         else self.value,
                 factor = f" ×{round(self.factor, 3)}" * (self.factor != 1 and self.value is not Null),
                 dimen = self.dimen.sign * (self.dimen is not self.Dimen.Unitless and self.value is not Null),

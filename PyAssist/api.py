@@ -492,14 +492,10 @@ def readTelemetryDescriptor(device: str = None) -> Telemetry:
 
 @Command(command='04 02', shortcut='st', required=True, expReply=False, category=Command.Type.TELE)
 def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
-                 frameSize: int = None, *, tm: Telemetry = None):
+                 frameSize: int = None):
     """ API: setTelemetry(mode=<0..4>/<reset|stream|framed|buffered|run|stop>/Telemetry.Mode,
                          [divider=<frequency split coefficient>], [frameSize=<samples per frame>])
-        Raises: RuntimeError - Telemetry.active is None and additional 'tm' argument is not provided
-        TODO: fix 'Detail' - no additional transactions are performed now
     """
-
-    tm = _ensureTelemetry_(tm)
 
     # Check 'mode' argument
     Modes = Telemetry.Mode
@@ -519,22 +515,19 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
     else:
         raise SignatureError(f"Invalid 'mode' argument - {mode}")
 
-    if mode not in (Modes.Stop, Modes.Reset):
-
-        # Check 'divider' argument
-        if divider == 0:
+    # Check 'divider' argument
+    if mode not in (Modes.Stop, Modes.Reset):  # TODO: update this to use new 'mode.running' property
+        if divider is None:
             raise SignatureError(f"Missing 'divider' argument")
-        if not isinstance(divider, int) or divider < 1:
-            raise ValueError(f"Invalid frequency divider argument - expected integer > 0, got '{divider}'")
+        if not isinstance(divider, int) or divider <= 0:
+            raise SignatureError(f"Invalid frequency divider argument - expected integer > 0, got '{divider}'")
 
-        # Check 'frameSize' argument
-        if Telemetry.Attrs.Framing in tm.attrs:
-            if frameSize is None:
-                log.warning(f"Frame size is not provided, using maximum value - {tm.maxFrameSize}")
-                frameSize = tm.maxFrameSize
-            if not isinstance(frameSize, int) or frameSize < 1 or frameSize > tm.maxFrameSize:
-                raise SignatureError(f"Invalid dataframe size argument - expected "
-                                     f"integer within [1..{tm.maxFrameSize}], got '{frameSize}'")
+    # Check 'frameSize' argument
+    if mode == Modes.Framed:
+        if frameSize is None:
+            raise SignatureError(f"Missing 'frameSize' argument")
+        elif not isinstance(frameSize, int) or frameSize <= 0:
+            raise SignatureError(f"Invalid dataframe size argument - expected integer > 0, got '{divider}'")
 
     reply = transaction(setTelemetry.command + struct.pack('< B I H', mode.value, divider or 1, frameSize or 0))
 
@@ -542,13 +535,8 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
 
 
 @Command(command='04 03', shortcut='as', required=True, expReply=NotImplemented, category=Command.Type.TELE)
-def addSignal(signal: Union[int, Signal], *, tm: Telemetry = None):
+def addSignal(signal: Union[int, Signal]):
     """ API: addSignal(signal=Signal()/<signal number>) """
-
-    tm = _ensureTelemetry_(tm)
-
-    if len(tm.signals) == tm.maxNumSignals:
-        raise RuntimeError(f"Cannot add signal - maximum of {tm.maxNumSignals} signals is reached ")
 
     signal = _ensureSignal_(signal)
     reply = transaction(addSignal.command + struct.pack('< H', signal.n))

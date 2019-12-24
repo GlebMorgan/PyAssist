@@ -2,12 +2,13 @@ from __future__ import annotations as _
 import re
 from enum import Enum, Flag, unique
 from functools import wraps, partial, partialmethod
+from itertools import dropwhile
 from types import MethodType
 from typing import Union, Callable, ClassVar, Optional, Collection, Sequence, List, Dict, TypeVar
 
 from CPython.Lib.functools import singledispatchmethod
 from Transceiver import SerialError, Transceiver
-from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict, AttrEnum
+from Utils import Logger, bytewise, auto_repr, classproperty, Null, formatDict, AttrEnum, store
 from src.Experiments.attr_tagging_concise import Classtools, TAG, const
 
 from . import api
@@ -622,7 +623,7 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     # Assist-defined parameters
     with TAG('service'):
-        name: str = Null  # TODO: could be None
+        name: str = Null
 
     # Descriptor-defined parameters
     with TAG('params') |const:
@@ -633,12 +634,11 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     # Telemetry-defined parameters
     with TAG('variables'):
-        divider: int = Null
+        divider: int = Null  # TODO: change to None, remove Null everywhere
         frameSize: int = Null
-        mode: Mode = Mode.Reset
-        status: Status = Status.Disabled
-        signals: List[Signal] = []
-        data: Sequence[Union[str, int, float, bool]] = []  # TODO: Do I need this here?
+        mode: Mode = Mode.Reset |const
+        status: Status = Status.Disabled |const
+        signals: List[Signal] = [] |const
 
     @classmethod
     def new(cls, name: str = None):
@@ -734,17 +734,144 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     formatPeriod: MethodType = partialmethod(formatValue, baseQuantity='μs')
 
-    @classmethod
-    def injectApiMethods(cls):
-        """ Add api methods-aliases to current class
-            Intended to be called after both
-                core.py and api.py modules would be fully loaded
+    @store(stored_signals=None)
+    def run(self, mode: Telemetry.Mode = None) -> bool:
+        """ Set telemetry mode to 'mode'.
+            If 'mode' is not provided, most suitable mode is chosen automatically
+            Device signals list is updated beforehand if changed since last run
         """
-        cls.run: MethodType = partial(api.setTelemetry, cls.Mode.Buffered)
-        cls.stop: MethodType = partial(api.setTelemetry, cls.Mode.Stop)
-        cls.reset: MethodType = partial(api.setTelemetry, cls.Mode.Reset)
-        cls.add: MethodType = partial(api.addSignal)
-        cls.read: MethodType = partial(api.readTelemetry)
+
+        # Choose the highest mode declared to be supported by .attrs
+        if mode is None:
+            mode = self.Mode(
+                dropwhile(lambda member: member.value > self.attrs.value, reversed(self.Attrs))
+                    .__next__().index + 1
+            )
+
+        # Make sure 'mode' has valid type
+        elif not isinstance(mode, self.Mode):
+            raise ValueError(f"Invalid mode - expected Mode enum, got '{mode.__class__.__name__}'")
+
+        # Stop before relaunching
+        if self.mode.running is True:
+            actionName = "Restarting"
+            self.stop()
+
+        # Stop or reset if respective mode is provided
+        else:
+            actionName = "Starting"
+            if mode.running is self.Mode.Stop:
+                return self.stop()
+            elif mode is self.Mode.Reset:
+                return self.reset()
+
+        # If framing is supported, make sure frame size does not exceed maximum set by descriptor
+        if self.Attrs.Framing in self.attrs and self.frameSize > self.maxFrameSize:
+            raise ValueError(f"Cannot start telemetry - dataframe size = {self.frameSize} samples per frame "
+                             f"exceeds maximum value = {self.maxFrameSize} set by descriptor")
+
+        log.info("{action} {telemetry} in '{mode}' mode at 1/{splitfreq} rate...".format(
+                action = actionName,
+                telemetry = "TM" if self.name is Null else f"TM '{self.name}'",
+                mode = mode,
+                splitfreq = self.divider,
+        ))
+
+        # Update device signals list if changed since last run
+        if Telemetry.run.stored_signals != self.signals:
+            log.debug(f"TM signals list changed - was {self.run.stored_signals}, now {self.signals}")
+            log.debug("Updating TM signals on device...")
+            try:
+                api.setTelemetry(self.Mode.Reset)
+                for signal in self.signals:
+                    api.addSignal(signal)
+            except (BadAckError, SerialError) as e:
+                log.error(f"Failed to {actionName.lower()} TM:\n\t{e}")
+                return False
+            Telemetry.run.stored_signals = self.signals.copy()
+            log.debug(f"Device TM signals updated - {self.signals}")
+
+        # Finally, launch TM
+        try:
+            api.setTelemetry(mode, self.divider, self.frameSize or 0)
+        except (BadAckError, SerialError) as e:
+            log.error(f"Failed to {actionName.lower()} TM:\n\t{e}")
+            return False
+
+        # Update .mode and .status
+        Telemetry.mode.slot.__set__(self, mode)
+        Telemetry.status.slot.__set__(self, self.Status.OK)
+
+        return True
+
+    def stop(self) -> bool:
+        """ Set telemetry to mode 4 """
+        if self.mode in (self.Mode.Stop, self.Mode.Reset):
+            log.warning(f"TM{f' {self.name}' or ''} is already stopped")
+
+        log.info(...)
+
+        try:
+            api.setTelemetry(self.Mode.Stop)
+        except (BadAckError, SerialError) as e:
+            log.error(f"Failed to stop TM:\n\t{e}")
+            return False
+
+        Telemetry.mode.slot.__set__(self, self.mode.Stop)
+        Telemetry.status.slot.__set__(self, self.Status.Disabled)
+
+        return True
+
+    def reset(self) -> bool:
+        """ Set telemetry to mode 0 and clear signals list """
+        if self.mode == self.Mode.Reset:
+            log.warning(f"TM{f' {self.name}' or ''} is already reset")
+
+        log.info(...)
+
+        try:
+            api.setTelemetry(self.Mode.Reset)
+        except (BadAckError, SerialError) as e:
+            log.error(f"Failed to reset TM - {e.__class__.__name__}:{e.args[0] if e.args else ''}")
+            return False
+
+        self.signals.clear()
+        Telemetry.mode.slot.__set__(self, self.mode.Reset)
+        Telemetry.status.slot.__set__(self, self.Status.Disabled)
+
+        return True
+
+    def add(self, signal: Signal) -> bool:
+        """ Append new signal to the end of signals list """
+
+        if not isinstance(signal, Signal):
+            raise ValueError(f"Invalid signal - expected Signal instance, got '{signal.__class__.__name__}'")
+        if len(self.signals) == self.maxNumSignals:
+            raise RuntimeError(f"Cannot add signal - maximum of {self.maxNumSignals} signals is reached ")
+
+        log.info(...)
+
+        try:
+            api.addSignal(signal)
+        except (BadAckError, SerialError) as e:
+            log.error(f"Failed to add signal '{signal.name}' to TM:\n\t{e}")
+            return False
+
+        self.signals.append(signal)
+
+        return True
+
+    def read(self):
+        """ TODO """
+        try:
+            data, status = api.readTelemetry()
+        except (BadAckError, SerialError) as e:
+            log.error(f"Failed to read data from TM:\n\t{e}")
+            return False
+
+        print(data, status)
+        # Telemetry.status.slot.__set__(self, status)
+        return True
 
 
 # ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————— #

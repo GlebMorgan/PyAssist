@@ -23,7 +23,6 @@ slog.setConsoleHandler(PacketFormatter(colorstyle='console',
         fmt=LogRecordFormat, datefmt=LogDateFormat, style='{',
         level_styles=LogStyle.records, field_styles=LogStyle.fields))
 
-Telemetry.injectApiMethods()
 
 insidePyCharm = "PYCHARM_HOSTED" in os.environ
 prompt = '' if insidePyCharm else '--> '

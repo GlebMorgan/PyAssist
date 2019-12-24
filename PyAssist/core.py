@@ -31,7 +31,7 @@ log.setLevel('SPAM')
 stubs = dict(
         notAssigned = '<N/A>',
         noNameAttr  = '<NoName>',
-        noAttrs  = '<NoAttrs>',
+        noFlags  ='<NoFlags>',
         noSignals = '<NoSignals>',
         rootSignal  = '<Root>',
         emptyTree = '<Empty>',
@@ -162,23 +162,19 @@ class Command():
 
 
 class ParamEnum(AttrEnum):
-
     def __str__(self):
         return self.name
 
+    def __index__(self):
+        return self.value
+
 
 class ParamFlagEnum(ParamEnum, Flag):
-
-    def __new__(cls, index, *args, **kwargs):
-        obj = object.__new__(cls)
-        obj._value_ = index
-        return obj
-
+    """
+        It is recommended to set value as 1 << n
+    """
     def __str__(self):
-        if self.value == 0:
-            return stubs['noAttrs']
-        else:
-            return Flag.__str__(self)[self.__class__.__name__.__len__()+1:]
+        return Flag.__str__(self)[self.__class__.__name__.__len__()+1:]
 
 
 class SignalsTree:
@@ -388,7 +384,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Type(ParamEnum):
-        __names__ = 'index', 'code', 'pytype'
+        __names__ = 'value', 'code', 'pytype'
 
         String = 0, '' , str    # type 0: char[]  -> N bytes
         Bool =   1, 'B', bool   # type 1: uint_8  -> 1 byte
@@ -401,8 +397,6 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Attrs(ParamFlagEnum):
-        __names__ = 'index'
-
         Control = 1 << 0
         Node = 1 << 1
         Signature = 1 << 2
@@ -412,7 +406,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
     @unique
     class Dimen(ParamEnum):
-        __names__ = 'index', 'sign'
+        __names__ = 'value', 'sign'
 
         Unitless = 0, ''
         Volt = 1, 'V'
@@ -508,7 +502,7 @@ class Signal(metaclass=Classtools, slots=True, init=False):
             try:
                 value = int(params[i]) if name == 'parent' else cls[name].type(params[i])
             except (ValueError, TypeError) as e:
-                raise DataInvalidError(f"Invalid signal #{n} descriptor parameter '{name}'  - {e.args[0]}")
+                raise DataInvalidError(f"Invalid signal #{n} descriptor parameter '{name}' - {e.args[0]}")
             setattr(this, name, value)
 
         for name in ('value', 'mode', 'signature'):
@@ -598,7 +592,7 @@ class Telemetry(metaclass=Classtools, slots=True):
     # CONSIDER: Telemetry() will return active tm object
 
     class Mode(ParamEnum):
-        __names__ = 'index', 'running', 'state'
+        __names__ = 'value', 'running', 'state'
 
         Reset = 0, False, 'OFF'
         Stream = 1, True, 'RUNNING (stream)'
@@ -608,8 +602,6 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     @unique
     class Status(ParamFlagEnum):
-        __names__ = 'index'
-
         Disabled = 0
         OK = 1 << 0
         Overflow = 1 << 1
@@ -622,8 +614,6 @@ class Telemetry(metaclass=Classtools, slots=True):
 
     @unique
     class Attrs(ParamFlagEnum):
-        __names__ = 'index'
-
         Streaming = 1 << 0  # continuous transmission of data samples
         Framing = 1 << 1    # divide data in frames and send it on .readData command
         Buffering = 1 << 2  # send data on .readData command

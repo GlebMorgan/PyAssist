@@ -88,7 +88,7 @@ def transaction(data: bytes) -> bytes:
                           f"got '{bytewise(reply[-1:])}'. Reply discarded", data=reply)
 
     if (reply[0] != ACK_OK):
-        raise BadAckError(f"Command execution failed", data=reply)
+        raise BadAckError(data=reply)
 
     # Cut ACK and LRC bytes
     return reply[1:-1]
@@ -527,7 +527,7 @@ def setTelemetry(mode: Union[int, str, Telemetry.Mode], divider: int = None,
         if frameSize is None:
             raise SignatureError(f"Missing 'frameSize' argument")
         elif not isinstance(frameSize, int) or frameSize <= 0:
-            raise SignatureError(f"Invalid dataframe size argument - expected integer > 0, got '{divider}'")
+            raise SignatureError(f"Invalid dataframe size argument - expected integer > 0, got '{frameSize}'")
 
     reply = transaction(setTelemetry.command + struct.pack('< B I H', mode.value, divider or 1, frameSize or 0))
 
@@ -545,10 +545,10 @@ def addSignal(signal: Union[int, Signal]):
 
 
 @Command(command='04 04', shortcut='rt', required=True, expReply=NotImplemented, category=Command.Type.TELE)
-def readTelemetry():
+def readTelemetry() -> Tuple[Tuple[Union[int, float, str, bool]], Telemetry.Status]:
     """ API: readTelemetry() """
 
-    return transaction(readTelemetry.command)
+    return (transaction(readTelemetry.command), None)
 
 
 def scanSignals(attempts: int = 2, *, tree: bool = True, init: bool = True,

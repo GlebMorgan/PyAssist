@@ -590,7 +590,16 @@ class Signal(metaclass=Classtools, slots=True, init=False):
 
 class Telemetry(metaclass=Classtools, slots=True):
 
-    # CONSIDER: Telemetry() will return active tm object
+    """
+    >>> tm = Telemetry.new('Sample')
+    >>> signal = Signal('sig', ...)
+    >>> tm
+    <Telemetry 'Sample': ... at 0x...>
+    >>> tm.reset()  # api.setTelemetry('reset')
+    >>> tm.signals.append(signal)  # api.addSignal(signal)
+    >>> tm.signals
+    [<Signal ... at 0x...>]
+    """
 
     class Mode(ParamEnum):
         __names__ = 'value', 'running', 'state'
@@ -697,13 +706,15 @@ class Telemetry(metaclass=Classtools, slots=True):
         return '\n'.join(lines)
 
     def __str__(self):
+        # CONSIDER: maybe, introduce kind of 'display' property = TM + name_if_exists?
+        #     To eliminate repetition of below code popping around all the way to the end of the class
         header = f"Telemetry '{self.name}'" if self.name is not Null else 'Telemetry'
-        return f"{header}: {self.mode.state} <{self.status}> [{len(self.signals)}]"
+        return f"{header}: {self.mode.state} <{self.status}> [{len(self.signals)} ~]"
 
     def __repr__(self):
         return auto_repr(self,
-            "{name}: {mode}{status}{perf}{frameSize} {attrs} [{signals}]".format(
-                name = f"Telemetry '{self.name}'" if self.name is not Null else 'Telemetry',
+            "{name}: {mode}{status}{perf}{frameSize} {{{attrs}}} [{signals}]".format(
+                name = f"'{self.name}'" if self.name is not Null else '',
                 mode = self.mode.state,
                 status = f' <{self.status}>' if self.mode not in (self.Mode.Reset, self.Mode.Stop) else '',
                 perf = f' ({self.formatPeriod(self.period)}, {self.formatFreq(self.frequency)})'

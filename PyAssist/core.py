@@ -665,7 +665,8 @@ class Telemetry(metaclass=Classtools, slots=True):
             setattr(this, name, value if name != 'minPeriod' else value/100)
 
         for name in Telemetry.__tags__['variables']:
-            setattr(this, name, Telemetry[name].default)
+            value = Telemetry[name].default
+            setattr(this, name, value.copy() if hasattr(value, 'copy') else value)
 
         return this
 

@@ -731,9 +731,9 @@ class Telemetry(metaclass=Classtools, slots=True):
         else:
             return f'{round(value, digits)}{baseQuantity}'
 
-    formatFreq: MethodType = partialmethod(formatValue, baseQuantity='Hz')
+    formatFreq: ClassVar[MethodType] = partialmethod(formatValue, baseQuantity='Hz')
 
-    formatPeriod: MethodType = partialmethod(formatValue, baseQuantity='μs')
+    formatPeriod: ClassVar[MethodType] = partialmethod(formatValue, baseQuantity='μs')
 
     @store(stored_signals=None)
     def run(self, mode: Telemetry.Mode = None) -> bool:
